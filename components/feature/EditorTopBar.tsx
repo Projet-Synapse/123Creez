@@ -10,9 +10,10 @@ interface Props {
   isDirty: boolean;
   onBack: () => void;
   onSave: () => void;
+  onExport: () => void;
 }
 
-const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave }) => {
+const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport }) => {
   const { activeTool, activeColor, brushSize } = useCanvas();
   const { theme } = useTheme();
 
@@ -51,6 +52,16 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave }) 
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>{Math.round(brushSize)}px</Text>
         </View>
       </View>
+
+      {/* Export button */}
+      <Pressable
+        style={({ pressed }) => [styles.exportBtn, { backgroundColor: theme.surfaceHigh }, pressed && { opacity: 0.7 }]}
+        onPress={onExport}
+        hitSlop={4}
+      >
+        <MaterialCommunityIcons name="export-variant" size={15} color={theme.textSecondary} />
+        <Text style={[styles.exportText, { color: theme.textSecondary }]}>Exporter</Text>
+      </Pressable>
 
       {/* Save button */}
       <Pressable
@@ -92,6 +103,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
   },
   saveText: { fontSize: 11, fontWeight: '700' },
+  exportBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20,
+  },
+  exportText: { fontSize: 11, fontWeight: '600' },
 });
 
 export default React.memo(EditorTopBar);

@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import {
   View, StyleSheet, PanResponder, GestureResponderEvent,
 } from 'react-native';
@@ -10,6 +10,7 @@ import Svg, {
 import Animated, {
   useAnimatedStyle, useSharedValue,
 } from 'react-native-reanimated';
+import { captureRef } from 'react-native-view-shot';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
 import { StrokePath, Tool } from '@/contexts/CanvasContext';
@@ -17,6 +18,13 @@ import { StrokePath, Tool } from '@/contexts/CanvasContext';
 interface Props {
   width: number;
   height: number;
+}
+
+// Imperative handle exposed via ref so parent screens (e.g. the editor's
+// export button) can capture the current canvas as an image, independent
+// of any in-progress zoom/pan.
+export interface DrawingCanvasHandle {
+  capture: () => Promise<string | null>;
 }
 
 // ─── SVG path builder ────────────────────────────────────────────────────────
@@ -197,7 +205,7 @@ function LayerRenderer({
 }
 
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
-const DrawingCanvas: React.FC<Props> = ({ width, height }) => {
+const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke,
     fillLayer, activeTool, activeLayerId, activeColor,
@@ -254,6 +262,46 @@ const DrawingCanvas: React.FC<Props> = ({ width, height }) => {
   const isDrawing = useRef(false);
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
+
+  // Capture the canvas as a PNG for export/share. Any active zoom/pan is
+  // temporarily reset so the export always reflects the full, un-zoomed
+  // canvas rather than whatever crop the user happens to be viewing.
+  useImperativeHandle(ref, () => ({
+    capture: async () => {
+      if (!containerRef.current) return null;
+      const prevScale = lastScale.current;
+      const prevTX = lastTranslateX.current;
+      const prevTY = lastTranslateY.current;
+      const needsReset = prevScale !== 1 || prevTX !== 0 || prevTY !== 0;
+
+      if (needsReset) {
+        scale.value = 1;
+        translateX.value = 0;
+        translateY.value = 0;
+        lastScale.current = 1;
+        lastTranslateX.current = 0;
+        lastTranslateY.current = 0;
+        // Give the animated transform a frame to settle before capturing.
+        await new Promise(resolve => setTimeout(resolve, 60));
+      }
+
+      try {
+        const uri = await captureRef(containerRef, { format: 'png', quality: 1 });
+        return uri;
+      } catch {
+        return null;
+      } finally {
+        if (needsReset) {
+          scale.value = prevScale;
+          translateX.value = prevTX;
+          translateY.value = prevTY;
+          lastScale.current = prevScale;
+          lastTranslateX.current = prevTX;
+          lastTranslateY.current = prevTY;
+        }
+      }
+    },
+  }), [scale, translateX, translateY]);
 
   function getDistance(touches: GestureResponderEvent['nativeEvent']['touches']) {
     if (touches.length < 2) return 0;
@@ -552,7 +600,9 @@ const DrawingCanvas: React.FC<Props> = ({ width, height }) => {
       </Animated.View>
     </View>
   );
-};
+});
+
+DrawingCanvas.displayName = 'DrawingCanvas';
 
 const styles = StyleSheet.create({
   container: { overflow: 'hidden' },

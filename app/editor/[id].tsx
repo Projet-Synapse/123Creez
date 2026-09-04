@@ -1,19 +1,20 @@
 // Powered by OnSpace.AI
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated,
+  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated, Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
+import * as Sharing from 'expo-sharing';
 import { useAlert } from '@/template';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useVault } from '@/hooks/useVault';
 import { useTheme } from '@/hooks/useTheme';
 import { useAutomation } from '@/hooks/useAutomation';
-import DrawingCanvas from '@/components/feature/DrawingCanvas';
+import DrawingCanvas, { DrawingCanvasHandle } from '@/components/feature/DrawingCanvas';
 import ToolBar from '@/components/feature/ToolBar';
 import RightPanel from '@/components/feature/RightPanel';
 import EditorTopBar from '@/components/feature/EditorTopBar';
@@ -47,6 +48,7 @@ export default function EditorScreen() {
   const [bottomExpanded, setBottomExpanded] = useState(false);
   const bottomAnim = useRef(new RNAnimated.Value(0)).current;
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<DrawingCanvasHandle>(null);
 
   const RIGHTPANEL_WIDTH = panelVisible ? 200 : 0;
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
@@ -110,6 +112,84 @@ export default function EditorScreen() {
 
   const canvasName = canvases.find(c => c.id === id)?.name ?? 'Toile';
 
+  const handleExport = useCallback(async () => {
+    const uri = await canvasRef.current?.capture();
+    if (!uri) {
+      showAlert('Export impossible', "La toile n'a pas pu être capturée. Réessayez.");
+      return;
+    }
+    const fileName = `${canvasName.replace(/[^a-z0-9_-]+/gi, '_') || 'toile'}.png`;
+    try {
+      if (Platform.OS === 'web') {
+        const link = document.createElement('a');
+        link.href = uri;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: canvasName });
+      } else {
+        showAlert('Export terminé', 'Le partage n\'est pas disponible sur cet appareil.');
+      }
+    } catch {
+      showAlert('Erreur d\'export', "Une erreur est survenue lors de l'export de l'image.");
+    }
+  }, [canvasName, showAlert]);
+
+  // ─── Keyboard shortcuts (web/desktop) ──────────────────────────────
+  // Speeds up common actions for mouse+keyboard users: undo/redo/save
+  // plus single-key tool switching, mirroring conventions from other
+  // drawing apps (Photoshop, Procreate for web, Figma, ...).
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const TOOL_KEYS: Record<string, Tool> = {
+      b: 'brush', p: 'pencil', e: 'eraser', g: 'fill', l: 'lasso', v: 'move',
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSave();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        handleExport();
+        return;
+      }
+      if (!mod && !e.altKey) {
+        const tool = TOOL_KEYS[e.key.toLowerCase()];
+        if (tool) {
+          e.preventDefault();
+          setActiveTool(tool);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, handleSave, handleExport, setActiveTool]);
+
   // Workspace background color (around the canvas)
   const workspaceBg = settings.workspaceBgColor ?? theme.surfaceHigh;
 
@@ -133,6 +213,7 @@ export default function EditorScreen() {
         isDirty={isDirty}
         onBack={handleBack}
         onSave={handleSave}
+        onExport={handleExport}
       />
 
       <View style={styles.workspace}>
@@ -155,7 +236,7 @@ export default function EditorScreen() {
             backgroundColor: workspaceBg,
           }]}>
             <View style={styles.canvasContainer}>
-              <DrawingCanvas width={canvasWidth} height={canvasHeight} />
+              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} />
             </View>
           </View>
 

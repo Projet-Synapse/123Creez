@@ -43,6 +43,7 @@ export default function VaultScreen() {
     moveCanvas, duplicateCanvas, createFolder, renameFolder, removeFolder } = useVault();
 
   const [activeFolderId, setActiveFolderId] = useState<string | 'root'>('root');
+  const [searchQuery, setSearchQuery] = useState('');
   const [showNewCanvas, setShowNewCanvas] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -59,6 +60,15 @@ export default function VaultScreen() {
   const [dimStep, setDimStep] = useState<'dims' | 'name'>('dims');
 
   const styles = makeStyles(theme);
+
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const isSearching = trimmedQuery.length > 0;
+
+  // A search looks across every canvas regardless of folder — finding a
+  // canvas by name shouldn't require remembering which folder it's in.
+  const searchResults = isSearching
+    ? canvases.filter(c => c.name.toLowerCase().includes(trimmedQuery))
+    : [];
 
   const visibleCanvases = canvases.filter(c =>
     activeFolderId === 'root' ? c.folderId === null : c.folderId === activeFolderId
@@ -252,68 +262,115 @@ export default function VaultScreen() {
         </View>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Breadcrumb */}
-        <View style={styles.breadcrumbRow}>
-          <Pressable
-            style={[styles.breadcrumb, activeFolderId === 'root' && styles.breadcrumbActive]}
-            onPress={() => setActiveFolderId('root')}
-          >
-            <MaterialCommunityIcons name="home-outline" size={14} color={activeFolderId === 'root' ? theme.accent : theme.textMuted} />
-            <Text style={[styles.breadcrumbText, activeFolderId === 'root' && { color: theme.accent }]}>Racine</Text>
-          </Pressable>
-          {activeFolderId !== 'root' && (() => {
-            const folder = folders.find(f => f.id === activeFolderId);
-            return folder ? (
-              <>
-                <MaterialCommunityIcons name="chevron-right" size={14} color={theme.textMuted} />
-                <View style={[styles.breadcrumb, styles.breadcrumbActive]}>
-                  <MaterialCommunityIcons name="folder" size={14} color={folder.color} />
-                  <Text style={[styles.breadcrumbText, { color: theme.accent }]}>{folder.name}</Text>
-                </View>
-              </>
-            ) : null;
-          })()}
-        </View>
-
-        {/* Folders */}
-        {activeFolderId === 'root' && rootFolders.length > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>Dossiers</Text>
-            <FlatList
-              data={rootFolders}
-              keyExtractor={f => f.id}
-              renderItem={renderFolder}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.foldersRow}
-              scrollEnabled={rootFolders.length > 3}
-            />
-          </>
-        )}
-
-        {/* Canvas list */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            {activeFolderId === 'root' ? 'Toutes les toiles' : folders.find(f => f.id === activeFolderId)?.name ?? 'Toiles'}
-          </Text>
-          <Text style={styles.sectionCount}>{visibleCanvases.length}</Text>
-        </View>
-
-        {visibleCanvases.length === 0 ? (
-          <View style={styles.emptyState}>
-            <MaterialCommunityIcons name="brush-outline" size={56} color={theme.textMuted} />
-            <Text style={styles.emptyTitle}>Aucune toile</Text>
-            <Text style={styles.emptySubtitle}>Créez votre première toile pour commencer</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={visibleCanvases}
-            keyExtractor={c => c.id}
-            renderItem={renderCanvas}
-            scrollEnabled={false}
-            contentContainerStyle={styles.canvasList}
+      {/* Search */}
+      {canvases.length > 0 && (
+        <View style={styles.searchRow}>
+          <MaterialCommunityIcons name="magnify" size={18} color={theme.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Rechercher une toile..."
+            placeholderTextColor={theme.textMuted}
+            returnKeyType="search"
           />
+          {isSearching && (
+            <Pressable onPress={() => setSearchQuery('')} hitSlop={8}>
+              <MaterialCommunityIcons name="close-circle" size={16} color={theme.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      )}
+
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {isSearching ? (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Résultats</Text>
+              <Text style={styles.sectionCount}>{searchResults.length}</Text>
+            </View>
+
+            {searchResults.length === 0 ? (
+              <View style={styles.emptyState}>
+                <MaterialCommunityIcons name="magnify-close" size={56} color={theme.textMuted} />
+                <Text style={styles.emptyTitle}>Aucun résultat</Text>
+                <Text style={styles.emptySubtitle}>Aucune toile ne correspond à &ldquo;{searchQuery.trim()}&rdquo;</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={searchResults}
+                keyExtractor={c => c.id}
+                renderItem={renderCanvas}
+                scrollEnabled={false}
+                contentContainerStyle={styles.canvasList}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            {/* Breadcrumb */}
+            <View style={styles.breadcrumbRow}>
+              <Pressable
+                style={[styles.breadcrumb, activeFolderId === 'root' && styles.breadcrumbActive]}
+                onPress={() => setActiveFolderId('root')}
+              >
+                <MaterialCommunityIcons name="home-outline" size={14} color={activeFolderId === 'root' ? theme.accent : theme.textMuted} />
+                <Text style={[styles.breadcrumbText, activeFolderId === 'root' && { color: theme.accent }]}>Racine</Text>
+              </Pressable>
+              {activeFolderId !== 'root' && (() => {
+                const folder = folders.find(f => f.id === activeFolderId);
+                return folder ? (
+                  <>
+                    <MaterialCommunityIcons name="chevron-right" size={14} color={theme.textMuted} />
+                    <View style={[styles.breadcrumb, styles.breadcrumbActive]}>
+                      <MaterialCommunityIcons name="folder" size={14} color={folder.color} />
+                      <Text style={[styles.breadcrumbText, { color: theme.accent }]}>{folder.name}</Text>
+                    </View>
+                  </>
+                ) : null;
+              })()}
+            </View>
+
+            {/* Folders */}
+            {activeFolderId === 'root' && rootFolders.length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Dossiers</Text>
+                <FlatList
+                  data={rootFolders}
+                  keyExtractor={f => f.id}
+                  renderItem={renderFolder}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.foldersRow}
+                  scrollEnabled={rootFolders.length > 3}
+                />
+              </>
+            )}
+
+            {/* Canvas list */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
+                {activeFolderId === 'root' ? 'Toutes les toiles' : folders.find(f => f.id === activeFolderId)?.name ?? 'Toiles'}
+              </Text>
+              <Text style={styles.sectionCount}>{visibleCanvases.length}</Text>
+            </View>
+
+            {visibleCanvases.length === 0 ? (
+              <View style={styles.emptyState}>
+                <MaterialCommunityIcons name="brush-outline" size={56} color={theme.textMuted} />
+                <Text style={styles.emptyTitle}>Aucune toile</Text>
+                <Text style={styles.emptySubtitle}>Créez votre première toile pour commencer</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={visibleCanvases}
+                keyExtractor={c => c.id}
+                renderItem={renderCanvas}
+                scrollEnabled={false}
+                contentContainerStyle={styles.canvasList}
+              />
+            )}
+          </>
         )}
 
         <View style={{ height: 100 }} />
@@ -578,6 +635,12 @@ function makeStyles(theme: any) {
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
     content: { flex: 1 },
+    searchRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      marginHorizontal: 16, marginTop: 12, paddingHorizontal: 12, height: 40,
+      borderRadius: 12, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder,
+    },
+    searchInput: { flex: 1, fontSize: 14, color: theme.textPrimary, height: '100%' },
     breadcrumbRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 4 },
     breadcrumb: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20, backgroundColor: theme.surfaceHigh },
     breadcrumbActive: { backgroundColor: theme.activeGlow },

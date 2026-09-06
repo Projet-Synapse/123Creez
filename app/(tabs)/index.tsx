@@ -23,6 +23,14 @@ interface DimPreset {
   icon: string;
 }
 
+type SortMode = 'updated' | 'name' | 'created';
+
+const SORT_MODES: { id: SortMode; label: string; icon: string }[] = [
+  { id: 'updated', label: 'Récent', icon: 'clock-outline' },
+  { id: 'name', label: 'Nom', icon: 'sort-alphabetical-ascending' },
+  { id: 'created', label: 'Création', icon: 'calendar-plus-outline' },
+];
+
 const DIM_PRESETS: DimPreset[] = [
   { label: 'Portrait HD', width: 1080, height: 1920, icon: 'phone-portrait' },
   { label: 'Paysage HD', width: 1920, height: 1080, icon: 'monitor' },
@@ -44,6 +52,7 @@ export default function VaultScreen() {
 
   const [activeFolderId, setActiveFolderId] = useState<string | 'root'>('root');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('updated');
   const [showNewCanvas, setShowNewCanvas] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -64,16 +73,34 @@ export default function VaultScreen() {
   const trimmedQuery = searchQuery.trim().toLowerCase();
   const isSearching = trimmedQuery.length > 0;
 
+  // Sorting is applied uniformly wherever a canvas list is shown (browsing
+  // or searching) so switching modes behaves predictably everywhere.
+  const sortCanvases = useCallback((list: CanvasMeta[]) => {
+    const sorted = [...list];
+    if (sortMode === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortMode === 'created') sorted.sort((a, b) => b.createdAt - a.createdAt);
+    else sorted.sort((a, b) => b.updatedAt - a.updatedAt);
+    return sorted;
+  }, [sortMode]);
+
+  const cycleSortMode = useCallback(() => {
+    setSortMode(prev => {
+      const idx = SORT_MODES.findIndex(m => m.id === prev);
+      return SORT_MODES[(idx + 1) % SORT_MODES.length].id;
+    });
+  }, []);
+
   // A search looks across every canvas regardless of folder — finding a
   // canvas by name shouldn't require remembering which folder it's in.
   const searchResults = isSearching
-    ? canvases.filter(c => c.name.toLowerCase().includes(trimmedQuery))
+    ? sortCanvases(canvases.filter(c => c.name.toLowerCase().includes(trimmedQuery)))
     : [];
 
-  const visibleCanvases = canvases.filter(c =>
+  const visibleCanvases = sortCanvases(canvases.filter(c =>
     activeFolderId === 'root' ? c.folderId === null : c.folderId === activeFolderId
-  );
+  ));
   const rootFolders = folders.filter(f => f.parentId === null);
+  const activeSortMode = SORT_MODES.find(m => m.id === sortMode)!;
 
   const getCanvasDims = () => {
     if (selectedPreset.label === 'Personnalisé') {
@@ -280,6 +307,17 @@ export default function VaultScreen() {
             </Pressable>
           )}
         </View>
+      )}
+
+      {/* Sort control */}
+      {canvases.length > 1 && (
+        <Pressable
+          style={[styles.sortBtn, { backgroundColor: theme.surfaceHigh, borderColor: theme.surfaceBorder }]}
+          onPress={cycleSortMode}
+        >
+          <MaterialCommunityIcons name={activeSortMode.icon as any} size={14} color={theme.textSecondary} />
+          <Text style={styles.sortBtnText}>Trier : {activeSortMode.label}</Text>
+        </Pressable>
       )}
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -641,6 +679,12 @@ function makeStyles(theme: any) {
       borderRadius: 12, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder,
     },
     searchInput: { flex: 1, fontSize: 14, color: theme.textPrimary, height: '100%' },
+    sortBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+      marginHorizontal: 16, marginTop: 10, paddingHorizontal: 10, paddingVertical: 6,
+      borderRadius: 20, borderWidth: 1,
+    },
+    sortBtnText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
     breadcrumbRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 4 },
     breadcrumb: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20, backgroundColor: theme.surfaceHigh },
     breadcrumbActive: { backgroundColor: theme.activeGlow },

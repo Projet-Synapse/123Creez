@@ -1,7 +1,7 @@
 // Powered by OnSpace.AI
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated, Platform,
+  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated, Platform, Modal, ScrollView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -37,7 +37,7 @@ export default function EditorScreen() {
     history, redoStack, undo, redo, clearCanvas, loadLayers, layers,
     activeLayerId, isDirty, markClean, setActiveTool, setActiveColor,
     setBrushSize, fillLayer, clearLayer, brushSize, setBrushOpacity,
-    brushOpacity, activeTool, activeColor,
+    brushOpacity, activeTool, activeColor, clearSelection,
   } = useCanvas();
   const { loadCanvasData, persistCanvas, canvases } = useVault();
   const { runTrigger, recording } = useAutomation();
@@ -46,9 +46,13 @@ export default function EditorScreen() {
   const [panelVisible, setPanelVisible] = useState(true);
   const [canvasLoaded, setCanvasLoaded] = useState(false);
   const [bottomExpanded, setBottomExpanded] = useState(false);
+  const [zoomPct, setZoomPct] = useState(100);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const bottomAnim = useRef(new RNAnimated.Value(0)).current;
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<DrawingCanvasHandle>(null);
+  const brushSizeRef = useRef(brushSize);
+  brushSizeRef.current = brushSize;
 
   const RIGHTPANEL_WIDTH = panelVisible ? 200 : 0;
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
@@ -177,6 +181,39 @@ export default function EditorScreen() {
         handleExport();
         return;
       }
+      // Zoom: mirrors the Ctrl/Cmd +/-/0 convention used by browsers and
+      // most design tools, so mouse+keyboard users aren't limited to pinch.
+      if (mod && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        canvasRef.current?.zoomIn();
+        return;
+      }
+      if (mod && e.key === '-') {
+        e.preventDefault();
+        canvasRef.current?.zoomOut();
+        return;
+      }
+      if (mod && e.key === '0') {
+        e.preventDefault();
+        canvasRef.current?.resetZoom();
+        return;
+      }
+      if (!mod && e.key === 'Escape') {
+        e.preventDefault();
+        clearSelection();
+        return;
+      }
+      if (!mod && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
+        e.preventDefault();
+        setShowShortcuts(v => !v);
+        return;
+      }
+      if (!mod && !e.altKey && (e.key === '[' || e.key === ']')) {
+        e.preventDefault();
+        const delta = e.key === ']' ? 2 : -2;
+        setBrushSize(Math.max(1, Math.min(80, brushSizeRef.current + delta)));
+        return;
+      }
       if (!mod && !e.altKey) {
         const tool = TOOL_KEYS[e.key.toLowerCase()];
         if (tool) {
@@ -188,7 +225,7 @@ export default function EditorScreen() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, handleSave, handleExport, setActiveTool]);
+  }, [undo, redo, handleSave, handleExport, setActiveTool, clearSelection, setBrushSize]);
 
   // Workspace background color (around the canvas)
   const workspaceBg = settings.workspaceBgColor ?? theme.surfaceHigh;
@@ -214,6 +251,7 @@ export default function EditorScreen() {
         onBack={handleBack}
         onSave={handleSave}
         onExport={handleExport}
+        onHelp={() => setShowShortcuts(true)}
       />
 
       <View style={styles.workspace}>
@@ -236,7 +274,29 @@ export default function EditorScreen() {
             backgroundColor: workspaceBg,
           }]}>
             <View style={styles.canvasContainer}>
-              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} />
+              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} />
+            </View>
+
+            {/* Zoom controls — the only way to zoom for mouse/trackpad users,
+                who have no pinch gesture (touch users already have pinch). */}
+            <View style={[styles.zoomControls, { backgroundColor: theme.panelBg, borderColor: theme.surfaceBorder }]}>
+              <Pressable
+                style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
+                onPress={() => canvasRef.current?.zoomOut()}
+                hitSlop={6}
+              >
+                <MaterialCommunityIcons name="minus" size={16} color={theme.textSecondary} />
+              </Pressable>
+              <Pressable onPress={() => canvasRef.current?.resetZoom()} hitSlop={6}>
+                <Text style={[styles.zoomText, { color: theme.textSecondary }]}>{zoomPct}%</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
+                onPress={() => canvasRef.current?.zoomIn()}
+                hitSlop={6}
+              >
+                <MaterialCommunityIcons name="plus" size={16} color={theme.textSecondary} />
+              </Pressable>
             </View>
           </View>
 
@@ -370,6 +430,46 @@ export default function EditorScreen() {
           <View style={styles.recDot} />
         </View>
       )}
+
+      {/* Keyboard shortcuts cheat sheet — the shortcuts already existed but
+          had no in-app discovery path other than trial and error. */}
+      <Modal visible={showShortcuts} transparent animationType="fade" onRequestClose={() => setShowShortcuts(false)}>
+        <Pressable style={styles.shortcutsOverlay} onPress={() => setShowShortcuts(false)}>
+          <View
+            style={[styles.shortcutsSheet, { backgroundColor: theme.surface, borderColor: theme.surfaceBorder }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.shortcutsHeader}>
+              <Text style={[styles.shortcutsTitle, { color: theme.textPrimary }]}>Raccourcis clavier</Text>
+              <Pressable onPress={() => setShowShortcuts(false)} hitSlop={8}>
+                <MaterialCommunityIcons name="close" size={18} color={theme.textSecondary} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {[
+                { keys: 'B / P / E / G / L / V', label: 'Pinceau / Crayon / Gomme / Remplir / Lasso / Déplacer' },
+                { keys: 'Ctrl/Cmd + Z', label: 'Annuler' },
+                { keys: 'Ctrl/Cmd + Maj + Z', label: 'Rétablir' },
+                { keys: 'Ctrl/Cmd + Y', label: 'Rétablir (alternatif)' },
+                { keys: 'Ctrl/Cmd + S', label: 'Sauvegarder' },
+                { keys: 'Ctrl/Cmd + E', label: 'Exporter' },
+                { keys: 'Ctrl/Cmd + +/-', label: 'Zoom avant / arrière' },
+                { keys: 'Ctrl/Cmd + 0', label: 'Réinitialiser le zoom' },
+                { keys: '[ / ]', label: 'Réduire / agrandir la taille du pinceau' },
+                { keys: 'Échap', label: 'Annuler la sélection' },
+                { keys: '?', label: 'Afficher ce menu' },
+              ].map(item => (
+                <View key={item.keys} style={[styles.shortcutRow, { borderBottomColor: theme.surfaceBorder }]}>
+                  <View style={[styles.shortcutKeys, { backgroundColor: theme.surfaceHigh }]}>
+                    <Text style={[styles.shortcutKeysText, { color: theme.textPrimary }]}>{item.keys}</Text>
+                  </View>
+                  <Text style={[styles.shortcutLabel, { color: theme.textSecondary }]}>{item.label}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -383,6 +483,23 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5, shadowRadius: 16, elevation: 12,
   },
+  zoomControls: {
+    position: 'absolute', bottom: 12, right: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 8, paddingVertical: 6, borderRadius: 20,
+    borderWidth: 1,
+  },
+  zoomBtn: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  zoomText: { fontSize: 12, fontWeight: '700', fontFamily: 'monospace', minWidth: 40, textAlign: 'center' },
+  // Shortcuts modal
+  shortcutsOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
+  shortcutsSheet: { width: 380, maxWidth: '90%', borderRadius: 18, borderWidth: 1, padding: 20 },
+  shortcutsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  shortcutsTitle: { fontSize: 17, fontWeight: '700' },
+  shortcutRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1 },
+  shortcutKeys: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, minWidth: 130 },
+  shortcutKeysText: { fontSize: 11, fontWeight: '700', fontFamily: 'monospace', textAlign: 'center' },
+  shortcutLabel: { fontSize: 12, flex: 1 },
   // Bottom brush panel
   bottomPanel: {
     borderTopWidth: 1,

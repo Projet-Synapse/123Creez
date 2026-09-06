@@ -1,7 +1,7 @@
 // Powered by OnSpace.AI
-import React, { useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
+import React, { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import {
-  View, StyleSheet, PanResponder, GestureResponderEvent,
+  View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
 } from 'react-native';
 import Svg, {
   Path, Rect, Line, Circle, Defs, ClipPath,
@@ -18,14 +18,24 @@ import { StrokePath, Tool } from '@/contexts/CanvasContext';
 interface Props {
   width: number;
   height: number;
+  // Called whenever zoom changes (pinch, wheel, or imperative zoom calls) so
+  // the parent screen can show a live percentage / reset button.
+  onZoomChange?: (percent: number) => void;
 }
 
 // Imperative handle exposed via ref so parent screens (e.g. the editor's
 // export button) can capture the current canvas as an image, independent
-// of any in-progress zoom/pan.
+// of any in-progress zoom/pan. Zoom controls let mouse/trackpad users (who
+// have no pinch gesture) zoom in and out from toolbar buttons or shortcuts.
 export interface DrawingCanvasHandle {
   capture: () => Promise<string | null>;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
 }
+
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 10;
 
 // ─── SVG path builder ────────────────────────────────────────────────────────
 function buildSvgPath(stroke: StrokePath): string {
@@ -205,7 +215,7 @@ function LayerRenderer({
 }
 
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
-const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height }, ref) => {
+const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke,
     fillLayer, activeTool, activeLayerId, activeColor,
@@ -263,6 +273,72 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height },
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
 
+  const onZoomChangeRef = useRef(onZoomChange);
+  onZoomChangeRef.current = onZoomChange;
+
+  // Zoom around a given point (in local/canvas-container coordinates) while
+  // keeping that point visually fixed — used by both wheel-zoom (anchored at
+  // the cursor) and the +/- buttons (anchored at the canvas center).
+  const zoomBy = useCallback((factor: number, anchorX: number, anchorY: number) => {
+    const oldScale = lastScale.current;
+    const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldScale * factor));
+    if (newScale === oldScale) return;
+    const canvasX = (anchorX - lastTranslateX.current) / oldScale;
+    const canvasY = (anchorY - lastTranslateY.current) / oldScale;
+    const newTX = anchorX - canvasX * newScale;
+    const newTY = anchorY - canvasY * newScale;
+    scale.value = newScale;
+    translateX.value = newTX;
+    translateY.value = newTY;
+    lastScale.current = newScale;
+    lastTranslateX.current = newTX;
+    lastTranslateY.current = newTY;
+    onZoomChangeRef.current?.(Math.round(newScale * 100));
+  }, [scale, translateX, translateY]);
+
+  const resetZoomInternal = useCallback(() => {
+    scale.value = 1;
+    translateX.value = 0;
+    translateY.value = 0;
+    lastScale.current = 1;
+    lastTranslateX.current = 0;
+    lastTranslateY.current = 0;
+    onZoomChangeRef.current?.(100);
+  }, [scale, translateX, translateY]);
+
+  // Mouse wheel: plain scroll pans the canvas, Ctrl/Cmd+scroll zooms toward
+  // the cursor — the same convention used by Figma and most design tools.
+  // Touch devices already get pinch-to-zoom via the PanResponder below, so
+  // this only matters on web where there is no pinch gesture.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = containerRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== 'function') return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = node.getBoundingClientRect?.();
+      const localX = rect ? e.clientX - rect.left : width / 2;
+      const localY = rect ? e.clientY - rect.top : height / 2;
+
+      if (e.ctrlKey || e.metaKey) {
+        const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+        zoomBy(factor, localX, localY);
+        return;
+      }
+
+      const newTX = lastTranslateX.current - e.deltaX;
+      const newTY = lastTranslateY.current - e.deltaY;
+      translateX.value = newTX;
+      translateY.value = newTY;
+      lastTranslateX.current = newTX;
+      lastTranslateY.current = newTY;
+    };
+
+    node.addEventListener('wheel', handleWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleWheel);
+  }, [width, height, zoomBy, translateX, translateY]);
+
   // Capture the canvas as a PNG for export/share. Any active zoom/pan is
   // temporarily reset so the export always reflects the full, un-zoomed
   // canvas rather than whatever crop the user happens to be viewing.
@@ -301,7 +377,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height },
         }
       }
     },
-  }), [scale, translateX, translateY]);
+    zoomIn: () => zoomBy(1.2, width / 2, height / 2),
+    zoomOut: () => zoomBy(1 / 1.2, width / 2, height / 2),
+    resetZoom: resetZoomInternal,
+  }), [scale, translateX, translateY, zoomBy, resetZoomInternal, width, height]);
 
   function getDistance(touches: GestureResponderEvent['nativeEvent']['touches']) {
     if (touches.length < 2) return 0;
@@ -405,10 +484,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height },
           const mid = getMidpointPage(touches);
 
           if (pinchStartDistance.current > 0) {
-            const newScale = Math.max(0.3, Math.min(10,
+            const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
               pinchStartScale.current * (newDist / pinchStartDistance.current)));
             scale.value = newScale;
             lastScale.current = newScale;
+            onZoomChangeRef.current?.(Math.round(newScale * 100));
           }
 
           const dx = mid.x - panStartX.current;

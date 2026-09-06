@@ -11,9 +11,10 @@ interface Props {
   onBack: () => void;
   onSave: () => void;
   onExport: () => void;
+  onHelp?: () => void;
 }
 
-const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport }) => {
+const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport, onHelp }) => {
   const { activeTool, activeColor, brushSize } = useCanvas();
   const { theme } = useTheme();
 
@@ -52,6 +53,17 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, on
           <Text style={[styles.statusText, { color: theme.textSecondary }]}>{Math.round(brushSize)}px</Text>
         </View>
       </View>
+
+      {/* Help / keyboard shortcuts */}
+      {onHelp && (
+        <Pressable
+          style={({ pressed }) => [styles.helpBtn, { backgroundColor: theme.surfaceHigh }, pressed && { opacity: 0.7 }]}
+          onPress={onHelp}
+          hitSlop={4}
+        >
+          <MaterialCommunityIcons name="help-circle-outline" size={17} color={theme.textSecondary} />
+        </Pressable>
+      )}
 
       {/* Export button */}
       <Pressable
@@ -108,6 +120,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20,
   },
   exportText: { fontSize: 11, fontWeight: '600' },
+  helpBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });
 
 export default React.memo(EditorTopBar);

@@ -132,7 +132,7 @@
     "react-native-infinite-scroll-view": "^0.4.5",
     "react-native-keyboard-aware-scroll-view": "^0.9.5",
     "react-native-keyboard-controller": "^1.17.5",
-    "react-native-pager-view": "6.7.1",
+    "react-native-pager-view": "9.0.4",
     "react-native-edge-to-edge": "1.6.0",
     "@gorhom/bottom-sheet": "4.4.6",
     "@react-native-masked-view/masked-view": "0.3.2",

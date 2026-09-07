@@ -38,6 +38,7 @@ export default function EditorScreen() {
     activeLayerId, isDirty, markClean, setActiveTool, setActiveColor,
     setBrushSize, fillLayer, clearLayer, brushSize, setBrushOpacity,
     brushOpacity, activeTool, activeColor, clearSelection,
+    addLayer, duplicateLayer,
   } = useCanvas();
   const { loadCanvasData, persistCanvas, canvases } = useVault();
   const { runTrigger, recording } = useAutomation();
@@ -53,6 +54,8 @@ export default function EditorScreen() {
   const canvasRef = useRef<DrawingCanvasHandle>(null);
   const brushSizeRef = useRef(brushSize);
   brushSizeRef.current = brushSize;
+  const activeLayerIdRef = useRef(activeLayerId);
+  activeLayerIdRef.current = activeLayerId;
 
   const RIGHTPANEL_WIDTH = panelVisible ? 200 : 0;
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
@@ -181,6 +184,19 @@ export default function EditorScreen() {
         handleExport();
         return;
       }
+      // Layer shortcuts: mirrors Photoshop's Ctrl/Cmd+J (duplicate layer)
+      // and Ctrl/Cmd+Shift+N (new layer) — previously only reachable via
+      // the layer panel's small "+" button, with no keyboard path at all.
+      if (mod && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        duplicateLayer(activeLayerIdRef.current);
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        addLayer();
+        return;
+      }
       // Zoom: mirrors the Ctrl/Cmd +/-/0 convention used by browsers and
       // most design tools, so mouse+keyboard users aren't limited to pinch.
       if (mod && (e.key === '=' || e.key === '+')) {
@@ -225,7 +241,7 @@ export default function EditorScreen() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, handleSave, handleExport, setActiveTool, clearSelection, setBrushSize]);
+  }, [undo, redo, handleSave, handleExport, setActiveTool, clearSelection, setBrushSize, duplicateLayer, addLayer]);
 
   // Workspace background color (around the canvas)
   const workspaceBg = settings.workspaceBgColor ?? theme.surfaceHigh;
@@ -453,6 +469,8 @@ export default function EditorScreen() {
                 { keys: 'Ctrl/Cmd + Y', label: 'Rétablir (alternatif)' },
                 { keys: 'Ctrl/Cmd + S', label: 'Sauvegarder' },
                 { keys: 'Ctrl/Cmd + E', label: 'Exporter' },
+                { keys: 'Ctrl/Cmd + J', label: 'Dupliquer le calque actif' },
+                { keys: 'Ctrl/Cmd + Maj + N', label: 'Nouveau calque' },
                 { keys: 'Ctrl/Cmd + +/-', label: 'Zoom avant / arrière' },
                 { keys: 'Ctrl/Cmd + 0', label: 'Réinitialiser le zoom' },
                 { keys: '[ / ]', label: 'Réduire / agrandir la taille du pinceau' },

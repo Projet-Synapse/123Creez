@@ -1,6 +1,6 @@
 // Powered by OnSpace.AI
-import React from 'react';
-import { View, StyleSheet, Text, Pressable, ScrollView } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet, Text, Pressable, ScrollView, TextInput } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useCanvas } from '@/hooks/useCanvas';
@@ -9,8 +9,26 @@ import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 const LayerPanel: React.FC = () => {
   const {
     layers, activeLayerId, setActiveLayerId,
-    addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer
+    addLayer, removeLayer, duplicateLayer, renameLayer, moveLayer,
+    toggleLayerVisibility, setLayerOpacity, clearLayer
   } = useCanvas();
+
+  // Tap the layer name to rename it inline — mirrors the rename pattern
+  // already used for canvases/folders in the vault screen.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const startRename = useCallback((id: string, currentName: string) => {
+    setRenamingId(id);
+    setRenameValue(currentName);
+  }, []);
+
+  const commitRename = useCallback(() => {
+    if (renamingId) renameLayer(renamingId, renameValue);
+    setRenamingId(null);
+  }, [renamingId, renameValue, renameLayer]);
+
+  const reversedLayers = [...layers].reverse();
 
   return (
     <View style={styles.container}>
@@ -25,8 +43,11 @@ const LayerPanel: React.FC = () => {
       </View>
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {[...layers].reverse().map(layer => {
+        {reversedLayers.map((layer, i) => {
           const isActive = layer.id === activeLayerId;
+          const isTopmost = i === 0;
+          const isBottommost = i === reversedLayers.length - 1;
+          const isRenaming = renamingId === layer.id;
           return (
             <View key={layer.id} style={[styles.layerItem, isActive && styles.layerItemActive]}>
               <Pressable
@@ -43,9 +64,23 @@ const LayerPanel: React.FC = () => {
                 </View>
 
                 <View style={styles.layerInfo}>
-                  <Text style={[styles.layerName, isActive && styles.layerNameActive]}>
-                    {layer.name}
-                  </Text>
+                  {isRenaming ? (
+                    <TextInput
+                      style={styles.layerNameInput}
+                      value={renameValue}
+                      onChangeText={setRenameValue}
+                      onSubmitEditing={commitRename}
+                      onBlur={commitRename}
+                      autoFocus
+                      selectTextOnFocus
+                    />
+                  ) : (
+                    <Pressable onPress={() => startRename(layer.id, layer.name)} hitSlop={4}>
+                      <Text style={[styles.layerName, isActive && styles.layerNameActive]}>
+                        {layer.name}
+                      </Text>
+                    </Pressable>
+                  )}
                   <Text style={styles.layerMeta}>
                     {layer.strokes.length} trait{layer.strokes.length !== 1 ? 's' : ''}
                   </Text>
@@ -54,6 +89,29 @@ const LayerPanel: React.FC = () => {
 
               {/* Controls */}
               <View style={styles.layerControls}>
+                <Pressable
+                  style={({ pressed }) => [styles.iconBtn, isTopmost && styles.iconBtnDisabled, pressed && !isTopmost && { opacity: 0.6 }]}
+                  onPress={() => moveLayer(layer.id, 'up')}
+                  disabled={isTopmost}
+                  hitSlop={6}
+                >
+                  <MaterialCommunityIcons name="arrow-up" size={16} color={isTopmost ? Colors.textMuted : Colors.textSecondary} />
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.iconBtn, isBottommost && styles.iconBtnDisabled, pressed && !isBottommost && { opacity: 0.6 }]}
+                  onPress={() => moveLayer(layer.id, 'down')}
+                  disabled={isBottommost}
+                  hitSlop={6}
+                >
+                  <MaterialCommunityIcons name="arrow-down" size={16} color={isBottommost ? Colors.textMuted : Colors.textSecondary} />
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+                  onPress={() => duplicateLayer(layer.id)}
+                  hitSlop={6}
+                >
+                  <MaterialCommunityIcons name="content-copy" size={16} color={Colors.textSecondary} />
+                </Pressable>
                 <Pressable
                   style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
                   onPress={() => toggleLayerVisibility(layer.id)}
@@ -178,6 +236,14 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontWeight: '600',
   },
+  layerNameInput: {
+    fontSize: FontSize.sm,
+    color: Colors.textPrimary,
+    fontWeight: '600',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.accent,
+    paddingVertical: 0,
+  },
   layerMeta: {
     fontSize: FontSize.xs,
     color: Colors.textMuted,
@@ -185,18 +251,22 @@ const styles = StyleSheet.create({
   },
   layerControls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'flex-end',
     paddingHorizontal: Spacing.sm,
     paddingBottom: Spacing.xs,
-    gap: 4,
+    gap: 3,
   },
   iconBtn: {
-    width: 30,
-    height: 30,
+    width: 26,
+    height: 26,
     borderRadius: Radius.sm,
     backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  iconBtnDisabled: {
+    opacity: 0.35,
   },
   opacityRow: {
     flexDirection: 'row',

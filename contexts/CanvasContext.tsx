@@ -68,6 +68,9 @@ interface CanvasContextType {
 
   addLayer: () => void;
   removeLayer: (id: string) => void;
+  duplicateLayer: (id: string) => void;
+  renameLayer: (id: string, name: string) => void;
+  moveLayer: (id: string, direction: 'up' | 'down') => void;
   toggleLayerVisibility: (id: string) => void;
   setLayerOpacity: (id: string, opacity: number) => void;
 
@@ -282,6 +285,54 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     markDirty();
   }, [activeLayerId, saveHistory, markDirty]);
 
+  // Inserts a copy of the layer directly above the original — mirrors the
+  // "Duplicate Layer" convention from Photoshop/Procreate, which the app
+  // otherwise has no equivalent for (only add/remove existed).
+  const duplicateLayer = useCallback((id: string) => {
+    setLayers(prev => {
+      const index = prev.findIndex(l => l.id === id);
+      if (index === -1) return prev;
+      saveHistory(prev);
+      const source = prev[index];
+      const newId = `layer-${++layerIdRef.current}`;
+      const copy: Layer = {
+        ...source,
+        id: newId,
+        name: `${source.name} copie`,
+        strokes: source.strokes.map(s => ({ ...s, id: `stroke-${++strokeIdRef.current}`, layerId: newId })),
+      };
+      const next = [...prev];
+      next.splice(index + 1, 0, copy);
+      setActiveLayerId(newId);
+      return next;
+    });
+    markDirty();
+  }, [saveHistory, markDirty]);
+
+  const renameLayer = useCallback((id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, name: trimmed } : l));
+    markDirty();
+  }, [markDirty]);
+
+  // Swaps a layer with its neighbor in stacking order. 'up' moves it later
+  // in the array (rendered above), matching how the layer panel — which
+  // lists layers top-of-stack first — displays them reversed.
+  const moveLayer = useCallback((id: string, direction: 'up' | 'down') => {
+    setLayers(prev => {
+      const index = prev.findIndex(l => l.id === id);
+      if (index === -1) return prev;
+      const targetIndex = direction === 'up' ? index + 1 : index - 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      saveHistory(prev);
+      const next = [...prev];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
+    markDirty();
+  }, [saveHistory, markDirty]);
+
   const toggleLayerVisibility = useCallback((id: string) => {
     setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l));
   }, []);
@@ -300,7 +351,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       beginStroke, continueStroke, endStroke,
       beginLasso, continueLasso, endLasso,
       moveSelection,
-      addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
+      addLayer, removeLayer, duplicateLayer, renameLayer, moveLayer,
+      toggleLayerVisibility, setLayerOpacity,
       undo, redo, clearCanvas, clearLayer, fillLayer,
       loadLayers, markClean,
     }}>

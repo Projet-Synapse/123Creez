@@ -24,6 +24,14 @@ autoUpdater.logger = log;
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
+// Même garde-fou que 123Système : le « è » du nom d'app (productName
+// « 123Créez » dans electron-builder.yml) finit dans le User-Agent, et la
+// reconstitution des en-têtes par undici dans protocol.handle exige des
+// ByteString (≤ 255) — le « è » re-décodé U+FFFD ferait échouer chaque
+// requête de ressource du renderer (page blanche). ASCII dans l'UA
+// seulement ; le nom accentué reste utilisé partout ailleurs.
+app.userAgentFallback = String(app.userAgentFallback || '').replaceAll('123Créez', '123Creez');
+
 // The preload reads this synchronously; registered at module load so it is
 // always answered before the first window is created.
 ipcMain.on('app:version', (event) => {

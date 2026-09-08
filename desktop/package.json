@@ -1,0 +1,17 @@
+{
+  "name": "creez-desktop",
+  "productName": "123Créez",
+  "version": "1.0.0",
+  "description": "123Créez — studio de dessin et vault de toiles",
+  "main": "main.js",
+  "author": {
+    "name": "Projet-Synapse",
+    "email": "catelyn2332-design@users.noreply.github.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  }
+}

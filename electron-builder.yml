@@ -1,0 +1,64 @@
+# Powered by OnSpace.AI — desktop packaging
+# Two-package.json layout: this repo's package.json holds the build tooling,
+# desktop/package.json holds the (tiny) runtime dependency set that ships.
+appId: com.creez.app
+productName: 123Créez
+copyright: Copyright © 2026 123Créez
+
+directories:
+  app: desktop
+  output: release
+  buildResources: assets
+
+files:
+  - main.js
+  - preload.js
+  - package.json
+  - renderer/**/*
+
+# Binaries and the update manifest (latest*.yml) are published to GitHub
+# Releases; electron-updater reads that same feed at runtime.
+publish:
+  provider: github
+  owner: Projet-Synapse
+  repo: 123Creez
+  releaseType: release
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Graphics
+  synopsis: Studio de dessin et vault de toiles
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.graphics-design
+  # Set CSC_LINK / CSC_KEY_PASSWORD in CI to sign; unsigned builds still run
+  # locally after the Gatekeeper prompt.
+  hardenedRuntime: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # Removes the previously installed build before laying down the new one.
+  deleteAppDataOnUninstall: false
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libsecret-1-0

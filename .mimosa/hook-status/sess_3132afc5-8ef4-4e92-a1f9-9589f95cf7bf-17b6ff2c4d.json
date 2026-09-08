@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-09-08T12:35:10.923Z",
+  "sessionId": "sess_3132afc5-8ef4-4e92-a1f9-9589f95cf7bf",
+  "event": "PostToolUse",
+  "toolName": "Edit",
+  "file": "C:\\Users\\Marianne\\.zcode\\workspace\\default\\synapse\\.diag-server.cjs",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 89,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

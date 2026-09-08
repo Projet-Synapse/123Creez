@@ -143,7 +143,7 @@ const AutomationPanel: React.FC<Props> = ({ canvasId }) => {
         <Pressable style={styles.modalOverlay} onPress={() => setShowTemplates(false)}>
           <View style={styles.modalSheet} onStartShouldSetResponder={() => true}>
             <View style={styles.handle} />
-            <Text style={styles.modalTitle}>Modèles d'automations</Text>
+            <Text style={styles.modalTitle}>Modèles d&apos;automations</Text>
             {AUTOMATION_TEMPLATES.map((tpl, i) => (
               <Pressable
                 key={i}

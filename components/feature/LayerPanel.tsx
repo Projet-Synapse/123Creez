@@ -9,7 +9,8 @@ import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 const LayerPanel: React.FC = () => {
   const {
     layers, activeLayerId, setActiveLayerId,
-    addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer
+    addLayer, removeLayer, duplicateLayer, moveLayerUp, moveLayerDown,
+    toggleLayerVisibility, setLayerOpacity, clearLayer
   } = useCanvas();
 
   return (
@@ -25,8 +26,10 @@ const LayerPanel: React.FC = () => {
       </View>
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {[...layers].reverse().map(layer => {
+        {layers.map((layer, idx) => ({ layer, idx })).reverse().map(({ layer, idx }) => {
           const isActive = layer.id === activeLayerId;
+          const canMoveUp = idx < layers.length - 1;
+          const canMoveDown = idx > 0;
           return (
             <View key={layer.id} style={[styles.layerItem, isActive && styles.layerItemActive]}>
               <Pressable
@@ -98,6 +101,39 @@ const LayerPanel: React.FC = () => {
                     maximumTrackTintColor={Colors.surfaceBorder}
                     thumbTintColor={Colors.accent}
                   />
+                </View>
+              )}
+
+              {/* Duplicate / reorder — only shown for the selected layer to
+                  keep the compact controls row from getting crowded. */}
+              {isActive && (
+                <View style={styles.layerActionsRow}>
+                  <Pressable
+                    style={({ pressed }) => [styles.duplicateBtn, pressed && { opacity: 0.7 }]}
+                    onPress={() => duplicateLayer(layer.id)}
+                    hitSlop={4}
+                  >
+                    <MaterialCommunityIcons name="content-copy" size={13} color={Colors.textSecondary} />
+                    <Text style={styles.duplicateLabel}>Dupliquer</Text>
+                  </Pressable>
+                  <View style={styles.reorderGroup}>
+                    <Pressable
+                      style={({ pressed }) => [styles.iconBtn, !canMoveUp && styles.disabled, pressed && canMoveUp && { opacity: 0.6 }]}
+                      onPress={() => moveLayerUp(layer.id)}
+                      disabled={!canMoveUp}
+                      hitSlop={4}
+                    >
+                      <MaterialCommunityIcons name="arrow-up-bold-outline" size={15} color={canMoveUp ? Colors.textSecondary : Colors.textMuted} />
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [styles.iconBtn, !canMoveDown && styles.disabled, pressed && canMoveDown && { opacity: 0.6 }]}
+                      onPress={() => moveLayerDown(layer.id)}
+                      disabled={!canMoveDown}
+                      hitSlop={4}
+                    >
+                      <MaterialCommunityIcons name="arrow-down-bold-outline" size={15} color={canMoveDown ? Colors.textSecondary : Colors.textMuted} />
+                    </Pressable>
+                  </View>
                 </View>
               )}
             </View>
@@ -220,6 +256,34 @@ const styles = StyleSheet.create({
   opacitySlider: {
     flex: 1,
     height: 30,
+  },
+  layerActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.sm,
+    paddingBottom: Spacing.xs,
+  },
+  duplicateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: Spacing.xs,
+    height: 26,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.surface,
+  },
+  duplicateLabel: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+  },
+  reorderGroup: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  disabled: {
+    opacity: 0.35,
   },
 });
 

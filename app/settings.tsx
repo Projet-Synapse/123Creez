@@ -180,7 +180,7 @@ export default function SettingsScreen() {
                   />
                 ))}
               </View>
-              <Text style={styles.hint}>La couleur d'accentuation sera appliquée au prochain rechargement.</Text>
+              <Text style={styles.hint}>La couleur d&apos;accentuation sera appliquée au prochain rechargement.</Text>
             </View>
           )}
 

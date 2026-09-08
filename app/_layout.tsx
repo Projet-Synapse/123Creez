@@ -6,12 +6,14 @@ import { CanvasProvider } from '@/contexts/CanvasContext';
 import { VaultProvider } from '@/contexts/VaultContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { AutomationProvider } from '@/contexts/AutomationContext';
+import { UpdateProvider } from '@/contexts/UpdateContext';
 
 export default function RootLayout() {
   return (
     <AlertProvider>
       <SafeAreaProvider>
         <ThemeProvider>
+          <UpdateProvider>
           <VaultProvider>
             <AutomationProvider>
             <CanvasProvider>
@@ -23,6 +25,7 @@ export default function RootLayout() {
             </CanvasProvider>
           </AutomationProvider>
           </VaultProvider>
+          </UpdateProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </AlertProvider>

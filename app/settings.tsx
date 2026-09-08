@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, StyleSheet, Text, Pressable, ScrollView, Switch, Modal, TextInput,
-  ActivityIndicator,
+  ActivityIndicator, Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,6 +10,8 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
+import { useUpdates } from '@/hooks/useUpdates';
+import { RELEASES_URL } from '@/constants/config';
 import { ThemeMode, CanvasBg } from '@/services/settingsService';
 import { getStorageInfo, clearAllData, formatBytes } from '@/services/vaultService';
 
@@ -57,6 +59,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { theme, settings, updateSettings } = useTheme();
   const { showAlert } = useAlert();
+  const updates = useUpdates();
   const [showCustomWsBg, setShowCustomWsBg] = useState(false);
   const [customWsHex, setCustomWsHex] = useState('');
   const [activeSection, setActiveSection] = useState<string | null>(null);
@@ -112,6 +115,7 @@ export default function SettingsScreen() {
     { id: 'interface', label: 'Interface', icon: 'view-dashboard-outline' },
     { id: 'performance', label: 'Performance', icon: 'speedometer-outline' },
     { id: 'storage', label: 'Stockage & Vault', icon: 'folder-outline' },
+    { id: 'updates', label: 'Mises à jour', icon: 'update' },
     { id: 'accessibility', label: 'Accessibilité', icon: 'eye-outline' },
   ];
 
@@ -180,7 +184,7 @@ export default function SettingsScreen() {
                   />
                 ))}
               </View>
-              <Text style={styles.hint}>La couleur d'accentuation sera appliquée au prochain rechargement.</Text>
+              <Text style={styles.hint}>La couleur d&apos;accentuation sera appliquée au prochain rechargement.</Text>
             </View>
           )}
 
@@ -407,6 +411,91 @@ export default function SettingsScreen() {
             </View>
           )}
 
+          {/* ─── Mises à jour ─── */}
+          {activeSection === 'updates' && (
+            <View style={styles.section}>
+              <SectionTitle label="Application" theme={theme} />
+              <Card theme={theme}>
+                <View style={styles.storageRow}>
+                  <MaterialCommunityIcons name="information-outline" size={20} color={theme.accent} />
+                  <Text style={[styles.storageLabel, { color: theme.textPrimary }]}>Version installée</Text>
+                  <Text style={[styles.storageVal, { color: theme.accent }]}>v{updates.currentVersion}</Text>
+                </View>
+                <Divider theme={theme} />
+                <View style={styles.storageRow}>
+                  <MaterialCommunityIcons name="update" size={20} color={theme.textSecondary} />
+                  <Text style={[styles.storageLabel, { color: theme.textPrimary }]}>Statut</Text>
+                  <Text style={[styles.storageVal, { color: theme.textSecondary }]}>{updateStatusLabel(updates)}</Text>
+                </View>
+                {updates.releaseNotes && updates.stage === 'available' ? (
+                  <>
+                    <Divider theme={theme} />
+                    <Text style={styles.releaseNotes} numberOfLines={8}>
+                      {updates.releaseNotes}
+                    </Text>
+                  </>
+                ) : null}
+                {updates.error ? (
+                  <>
+                    <Divider theme={theme} />
+                    <Text style={styles.updateError}>{updates.error}</Text>
+                  </>
+                ) : null}
+              </Card>
+
+              <SectionTitle label="Recherche manuelle" theme={theme} />
+              <Card theme={theme}>
+                <Pressable
+                  style={styles.langRow}
+                  onPress={() => void updates.check()}
+                  disabled={updates.stage === 'checking'}
+                >
+                  <MaterialCommunityIcons name="magnify" size={18} color={theme.accent} />
+                  <Text style={[styles.langLabel, { color: theme.textPrimary }]}>
+                    {updates.stage === 'checking' ? 'Vérification…' : 'Rechercher une mise à jour'}
+                  </Text>
+                  {updates.stage === 'checking' && <ActivityIndicator size="small" color={theme.accent} />}
+                </Pressable>
+                {(updates.stage === 'available' || updates.stage === 'ready') && updates.canSelfInstall ? (
+                  <>
+                    <Divider theme={theme} />
+                    <Pressable style={styles.langRow} onPress={() => void updates.applyUpdate()}>
+                      <MaterialCommunityIcons name="restart" size={18} color={theme.accent} />
+                      <Text style={[styles.langLabel, { color: theme.textPrimary }]}>
+                        {updates.stage === 'ready' ? 'Redémarrer et installer' : 'Installer et redémarrer'}
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : updates.stage === 'available' && !updates.canSelfInstall ? (
+                  <>
+                    <Divider theme={theme} />
+                    <Pressable
+                      style={styles.langRow}
+                      onPress={() => void Linking.openURL(updates.downloadUrl ?? RELEASES_URL)}
+                    >
+                      <MaterialCommunityIcons name="open-in-new" size={18} color={theme.accent} />
+                      <Text style={[styles.langLabel, { color: theme.textPrimary }]}>Page de téléchargement</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+              </Card>
+
+              <SectionTitle label="Automatisme" theme={theme} />
+              <Card theme={theme}>
+                <ToggleRow
+                  label="Mise à jour automatique"
+                  value={updates.autoUpdate}
+                  onToggle={updates.setAutoUpdate}
+                  theme={theme}
+                />
+                <Text style={styles.hint}>
+                  Télécharge les nouvelles versions en arrière-plan et les installe à la fermeture de
+                  l&apos;application.
+                </Text>
+              </Card>
+            </View>
+          )}
+
           {/* ─── Accessibilité ─── */}
           {activeSection === 'accessibility' && (
             <View style={styles.section}>
@@ -510,6 +599,25 @@ function ToggleRow({ label, value, onToggle, theme }: { label: string; value: bo
   );
 }
 
+function updateStatusLabel(update: ReturnType<typeof useUpdates>): string {
+  switch (update.stage) {
+    case 'checking':
+      return 'Vérification…';
+    case 'available':
+      return update.latestVersion ? `${update.latestVersion} disponible` : 'Mise à jour disponible';
+    case 'downloading':
+      return typeof update.progress === 'number' ? `Téléchargement ${update.progress}%` : 'Téléchargement…';
+    case 'ready':
+      return 'Prête à installer';
+    case 'error':
+      return 'Échec de la vérification';
+    case 'up-to-date':
+      return 'À jour';
+    default:
+      return '—';
+  }
+}
+
 function makeStyles(theme: any) {
   return StyleSheet.create({
     root: { flex: 1, backgroundColor: theme.bg },
@@ -574,6 +682,9 @@ function makeStyles(theme: any) {
     dangerHint: { fontSize: 11, color: theme.textMuted, marginTop: 2 },
     refreshBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, marginTop: 8 },
     refreshText: { fontSize: 13, fontWeight: '600' },
+    // Updates
+    releaseNotes: { fontSize: 12, color: theme.textSecondary, lineHeight: 18, paddingVertical: 8 },
+    updateError: { fontSize: 12, color: theme.danger, paddingVertical: 8 },
     // Interface
     langRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
     langLabel: { flex: 1, fontSize: 14, fontWeight: '500' },

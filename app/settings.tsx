@@ -385,12 +385,13 @@ export default function SettingsScreen() {
 
               <SectionTitle label="Format d'export par défaut" theme={theme} />
               <View style={styles.exportRow}>
-                {['PNG', 'JPEG', 'SVG', 'PDF'].map(fmt => (
+                {['PNG', 'JPEG'].map(fmt => (
                   <Pressable key={fmt} style={[styles.exportBtn, settings.defaultExportFormat === fmt && { backgroundColor: theme.accent, borderColor: theme.accent }]} onPress={() => updateSettings({ defaultExportFormat: fmt })}>
                     <Text style={[styles.exportText, settings.defaultExportFormat === fmt && { color: '#0d0d0d' }]}>{fmt}</Text>
                   </Pressable>
                 ))}
               </View>
+              <Text style={styles.hint}>PNG est sans perte ; JPEG produit des fichiers plus légers (fond opaque).</Text>
 
               <SectionTitle label="Zone de danger" theme={theme} />
               <Card theme={theme}>

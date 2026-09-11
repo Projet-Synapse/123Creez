@@ -16,10 +16,11 @@ interface Props {
 
 const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport, onHelp }) => {
   const { activeTool, activeColor, brushSize } = useCanvas();
-  const { theme } = useTheme();
+  const { theme, settings } = useTheme();
 
   const toolLabels: Record<string, string> = {
     brush: 'Pinceau', pencil: 'Crayon', eraser: 'Gomme', fill: 'Remplir',
+    lasso: 'Lasso', move: 'Déplacer',
   };
 
   return (
@@ -39,20 +40,23 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, on
         {isDirty && <View style={[styles.dirtyDot, { backgroundColor: theme.accentGold }]} />}
       </View>
 
-      {/* Status chips */}
-      <View style={styles.statusArea}>
-        <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
-          <MaterialCommunityIcons name="pencil-ruler" size={12} color={theme.textMuted} />
-          <Text style={[styles.statusText, { color: theme.textSecondary }]}>{toolLabels[activeTool]}</Text>
+      {/* Status chips — hidden when the "Barre d'état du canvas" setting is off */}
+      {settings.showStatusBar && (
+        <View style={styles.statusArea}>
+          <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
+            <MaterialCommunityIcons name="pencil-ruler" size={12} color={theme.textMuted} />
+            <Text style={[styles.statusText, { color: theme.textSecondary }]}>{toolLabels[activeTool]}</Text>
+          </View>
+          <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
+            <View style={[styles.colorDot, { backgroundColor: activeColor, borderColor: theme.surfaceBorder }]} />
+            <Text style={[styles.statusText, { color: theme.textSecondary }]}>{activeColor.toUpperCase()}</Text>
+          </View>
+          <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
+            <Text style={[styles.statusText, { color: theme.textSecondary }]}>{Math.round(brushSize)}px</Text>
+          </View>
         </View>
-        <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
-          <View style={[styles.colorDot, { backgroundColor: activeColor, borderColor: theme.surfaceBorder }]} />
-          <Text style={[styles.statusText, { color: theme.textSecondary }]}>{activeColor.toUpperCase()}</Text>
-        </View>
-        <View style={[styles.statusChip, { backgroundColor: theme.surfaceHigh }]}>
-          <Text style={[styles.statusText, { color: theme.textSecondary }]}>{Math.round(brushSize)}px</Text>
-        </View>
-      </View>
+      )}
+      {!settings.showStatusBar && <View style={styles.statusArea} />}
 
       {/* Help / keyboard shortcuts */}
       {onHelp && (

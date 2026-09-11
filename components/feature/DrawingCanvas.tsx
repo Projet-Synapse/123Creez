@@ -28,7 +28,7 @@ interface Props {
 // of any in-progress zoom/pan. Zoom controls let mouse/trackpad users (who
 // have no pinch gesture) zoom in and out from toolbar buttons or shortcuts.
 export interface DrawingCanvasHandle {
-  capture: () => Promise<string | null>;
+  capture: (format?: 'png' | 'jpg') => Promise<string | null>;
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
@@ -221,7 +221,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     fillLayer, activeTool, activeLayerId, activeColor,
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
-    moveSelection,
+    moveSelection, snapshotHistory,
   } = useCanvas();
   const { settings } = useTheme();
 
@@ -245,6 +245,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const continueLassoRef = useRef(continueLasso);
   const endLassoRef = useRef(endLasso);
   const moveSelectionRef = useRef(moveSelection);
+  const snapshotHistoryRef = useRef(snapshotHistory);
   beginStrokeRef.current = beginStroke;
   continueStrokeRef.current = continueStroke;
   endStrokeRef.current = endStroke;
@@ -253,6 +254,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   continueLassoRef.current = continueLasso;
   endLassoRef.current = endLasso;
   moveSelectionRef.current = moveSelection;
+  snapshotHistoryRef.current = snapshotHistory;
 
   // ─── Zoom & Pan ───────────────────────────────────────────────────
   const scale = useSharedValue(1);
@@ -272,6 +274,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const isDrawing = useRef(false);
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
+  const moveSnapshotTaken = useRef(false);
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
@@ -343,7 +346,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // temporarily reset so the export always reflects the full, un-zoomed
   // canvas rather than whatever crop the user happens to be viewing.
   useImperativeHandle(ref, () => ({
-    capture: async () => {
+    capture: async (format: 'png' | 'jpg' = 'png') => {
       if (!containerRef.current) return null;
       const prevScale = lastScale.current;
       const prevTX = lastTranslateX.current;
@@ -362,7 +365,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       }
 
       try {
-        const uri = await captureRef(containerRef, { format: 'png', quality: 1 });
+        const uri = await captureRef(containerRef, {
+          format,
+          quality: format === 'jpg' ? 0.92 : 1,
+        });
         return uri;
       } catch {
         return null;
@@ -451,6 +457,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         if (tool === 'move') {
           isDrawing.current = true;
+          moveSnapshotTaken.current = false;
           const c = toCanvasCoords(pageX, pageY);
           moveLastX.current = c.x;
           moveLastY.current = c.y;
@@ -518,6 +525,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           const c = toCanvasCoords(pageX, pageY);
           const ddx = c.x - moveLastX.current;
           const ddy = c.y - moveLastY.current;
+          // One history snapshot per drag gesture, taken on the first actual
+          // movement — undo rolls back the whole move, and a plain tap
+          // without dragging doesn't pollute the history.
+          if ((ddx !== 0 || ddy !== 0) && !moveSnapshotTaken.current) {
+            snapshotHistoryRef.current();
+            moveSnapshotTaken.current = true;
+          }
           moveSelectionRef.current(ddx, ddy);
           moveLastX.current = c.x;
           moveLastY.current = c.y;

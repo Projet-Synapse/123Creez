@@ -31,16 +31,26 @@ interface ToolBarProps {
   panelVisible: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Which side of the workspace the bar is docked to — drives the border
+      side and mirrors the layout order in the editor. */
+  position?: 'left' | 'right';
 }
 
 const ToolBar: React.FC<ToolBarProps> = ({
-  onUndo, onRedo, onClear, onLayersToggle, onPanelToggle, panelVisible, canUndo, canRedo
+  onUndo, onRedo, onClear, onLayersToggle, onPanelToggle, panelVisible, canUndo, canRedo, position = 'left'
 }) => {
   const { activeTool, setActiveTool, selection, clearSelection } = useCanvas();
   const { theme } = useTheme();
+  const isRight = position === 'right';
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.panelBg, borderRightColor: theme.surfaceBorder }]}>
+    <View style={[
+      styles.container,
+      { backgroundColor: theme.panelBg },
+      isRight
+        ? { borderLeftWidth: 1, borderLeftColor: theme.surfaceBorder }
+        : { borderRightWidth: 1, borderRightColor: theme.surfaceBorder },
+    ]}>
       {/* Undo / Redo */}
       <View style={styles.actionGroup}>
         <Pressable
@@ -132,8 +142,6 @@ const styles = StyleSheet.create({
   container: {
     width: 56,
     backgroundColor: Colors.panelBg,
-    borderRightWidth: 1,
-    borderRightColor: Colors.surfaceBorder,
     paddingVertical: Spacing.md,
     alignItems: 'center',
     gap: Spacing.xs,

@@ -3,6 +3,7 @@ import React, {
   createContext, useState, useCallback,
   ReactNode, useRef,
 } from 'react';
+import { useTheme } from '@/hooks/useTheme';
 
 export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move';
 
@@ -73,6 +74,10 @@ interface CanvasContextType {
 
   undo: () => void;
   redo: () => void;
+  /** Push the current layers onto the history stack without altering them —
+      used by the editor to snapshot once at the start of a drag gesture
+      (e.g. moving a selection) instead of once per pointer event. */
+  snapshotHistory: () => void;
   clearCanvas: () => void;
   clearLayer: (id: string) => void;
   fillLayer: (layerId: string, color: string) => void;
@@ -88,6 +93,8 @@ const createDefaultLayers = (): Layer[] => [
 ];
 
 export function CanvasProvider({ children }: { children: ReactNode }) {
+  const { settings } = useTheme();
+  const historyLimit = Math.max(5, settings.historyLimit ?? 30);
   const [canvasId, setCanvasId] = useState<string | null>(null);
   const [layers, setLayers] = useState<Layer[]>(createDefaultLayers());
   const [activeLayerId, setActiveLayerId] = useState('layer-1');
@@ -107,11 +114,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const moveStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const saveHistory = useCallback((prevLayers: Layer[]) => {
-    setHistory(h => [...h.slice(-30), prevLayers.map(l => ({ ...l, strokes: [...l.strokes] }))]);
+    setHistory(h => [...h.slice(-(historyLimit - 1)), prevLayers.map(l => ({ ...l, strokes: [...l.strokes] }))]);
     setRedoStack([]);
-  }, []);
+  }, [historyLimit]);
 
   const markDirty = useCallback(() => setIsDirty(true), []);
+
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
   const markClean = useCallback(() => setIsDirty(false), []);
 
   const loadLayers = useCallback((id: string, newLayers: Layer[], newActiveLayerId: string) => {
@@ -195,23 +205,33 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ─── Move ─────────────────────────────────────────────────────────────
+  // With an active selection, only the strokes it covers are moved (fill
+  // strokes cover the whole canvas and are never moved). Without one, the
+  // whole active layer's content moves — the previous behavior moved every
+  // stroke even with a lasso selection, making the lasso useless.
   const moveSelection = useCallback((dx: number, dy: number) => {
+    const sel = selection;
+    const hit = (stroke: StrokePath) => {
+      if (stroke.tool === 'fill') return false;
+      if (!sel) return true;
+      const pad = stroke.size / 2;
+      return stroke.points.some(p =>
+        p.x >= sel.x - pad && p.x <= sel.x + sel.width + pad &&
+        p.y >= sel.y - pad && p.y <= sel.y + sel.height + pad
+      );
+    };
     setSelection(prev => prev ? { ...prev, x: prev.x + dx, y: prev.y + dy } : null);
-    // Move all strokes within the selection on the active layer
-    setLayers(prev => {
-      return prev.map(layer => {
-        if (layer.id !== activeLayerId) return layer;
-        return {
-          ...layer,
-          strokes: layer.strokes.map(stroke => ({
-            ...stroke,
-            points: stroke.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
-          })),
-        };
-      });
-    });
+    setLayers(prev => prev.map(layer => {
+      if (layer.id !== activeLayerId) return layer;
+      return {
+        ...layer,
+        strokes: layer.strokes.map(stroke => hit(stroke)
+          ? { ...stroke, points: stroke.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+          : stroke),
+      };
+    }));
     markDirty();
-  }, [activeLayerId, markDirty]);
+  }, [activeLayerId, selection, markDirty]);
 
   const fillLayer = useCallback((layerId: string, color: string) => {
     const id = `stroke-fill-${++strokeIdRef.current}`;
@@ -229,6 +249,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [brushOpacity, saveHistory, markDirty]);
 
   const undo = useCallback(() => {
+    if (history.length === 0) return;
     setHistory(h => {
       if (h.length === 0) return h;
       const prev = [...h];
@@ -238,9 +259,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return prev;
     });
     markDirty();
-  }, [layers, markDirty]);
+  }, [history.length, layers, markDirty]);
 
   const redo = useCallback(() => {
+    if (redoStack.length === 0) return;
     setRedoStack(r => {
       if (r.length === 0) return r;
       const next = [...r];
@@ -250,7 +272,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return next;
     });
     markDirty();
-  }, [layers, markDirty]);
+  }, [redoStack.length, layers, markDirty]);
+
+  const snapshotHistory = useCallback(() => {
+    saveHistory(layersRef.current);
+  }, [saveHistory]);
 
   const clearCanvas = useCallback(() => {
     setLayers(prev => { saveHistory(prev); return prev.map(l => ({ ...l, strokes: [] })); });
@@ -282,13 +308,20 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     markDirty();
   }, [activeLayerId, saveHistory, markDirty]);
 
+  // Visibility and opacity edits now mark the canvas dirty (they previously
+  // weren't persisted by auto-save) and visibility changes are undoable.
   const toggleLayerVisibility = useCallback((id: string) => {
-    setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l));
-  }, []);
+    setLayers(prev => {
+      saveHistory(prev);
+      return prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l);
+    });
+    markDirty();
+  }, [saveHistory, markDirty]);
 
   const setLayerOpacity = useCallback((id: string, opacity: number) => {
     setLayers(prev => prev.map(l => l.id === id ? { ...l, opacity } : l));
-  }, []);
+    markDirty();
+  }, [markDirty]);
 
   return (
     <CanvasContext.Provider value={{
@@ -301,7 +334,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       beginLasso, continueLasso, endLasso,
       moveSelection,
       addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
-      undo, redo, clearCanvas, clearLayer, fillLayer,
+      undo, redo, snapshotHistory, clearCanvas, clearLayer, fillLayer,
       loadLayers, markClean,
     }}>
       {children}

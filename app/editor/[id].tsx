@@ -57,6 +57,9 @@ export default function EditorScreen() {
   const RIGHTPANEL_WIDTH = panelVisible ? 200 : 0;
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
   const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom - TOPBAR_HEIGHT - BOTTOM_PANEL_HEIGHT;
+  // Honor the "Position de la barre d'outils" setting — the bar docks to the
+  // chosen side of the workspace.
+  const toolbarRight = settings.toolbarPosition === 'right';
 
   const toggleBottom = useCallback(() => {
     const toValue = bottomExpanded ? 0 : 1;
@@ -96,6 +99,28 @@ export default function EditorScreen() {
     return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
   }, [save, settings.autoSaveInterval]);
 
+  // Data-loss guard on web: closing the tab or navigating away with unsaved
+  // changes fires a last-chance save instead of silently dropping work.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const persistNow = () => { saveRef.current(); };
+    const handleUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      persistNow();
+      // Classic prompt so the user can cancel a close with pending work.
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    document.addEventListener('visibilitychange', persistNow);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', persistNow);
+    };
+  }, [isDirty]);
+
   const handleBack = useCallback(async () => {
     await save();
     router.back();
@@ -117,12 +142,15 @@ export default function EditorScreen() {
   const canvasName = canvases.find(c => c.id === id)?.name ?? 'Toile';
 
   const handleExport = useCallback(async () => {
-    const uri = await canvasRef.current?.capture();
+    // The export format setting drives the capture: JPEG for compressed
+    // exports, PNG (lossless) otherwise.
+    const format = settings.defaultExportFormat === 'JPEG' ? 'jpg' : 'png';
+    const uri = await canvasRef.current?.capture(format);
     if (!uri) {
       showAlert('Export impossible', "La toile n'a pas pu être capturée. Réessayez.");
       return;
     }
-    const fileName = `${canvasName.replace(/[^a-z0-9_-]+/gi, '_') || 'toile'}.png`;
+    const fileName = `${canvasName.replace(/[^a-z0-9_-]+/gi, '_') || 'toile'}.${format === 'jpg' ? 'jpg' : 'png'}`;
     try {
       if (Platform.OS === 'web') {
         const link = document.createElement('a');
@@ -134,14 +162,17 @@ export default function EditorScreen() {
         return;
       }
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: canvasName });
+        await Sharing.shareAsync(uri, {
+          mimeType: format === 'jpg' ? 'image/jpeg' : 'image/png',
+          dialogTitle: canvasName,
+        });
       } else {
         showAlert('Export terminé', 'Le partage n\'est pas disponible sur cet appareil.');
       }
     } catch {
       showAlert('Erreur d\'export', "Une erreur est survenue lors de l'export de l'image.");
     }
-  }, [canvasName, showAlert]);
+  }, [canvasName, showAlert, settings.defaultExportFormat]);
 
   // ─── Keyboard shortcuts (web/desktop) ──────────────────────────────
   // Speeds up common actions for mouse+keyboard users: undo/redo/save
@@ -255,16 +286,19 @@ export default function EditorScreen() {
       />
 
       <View style={styles.workspace}>
-        <ToolBar
-          onUndo={undo}
-          onRedo={redo}
-          onClear={handleClear}
-          onLayersToggle={() => setShowLayers(v => !v)}
-          onPanelToggle={() => setPanelVisible(v => !v)}
-          panelVisible={panelVisible}
-          canUndo={history.length > 0}
-          canRedo={redoStack.length > 0}
-        />
+        {!toolbarRight && (
+          <ToolBar
+            onUndo={undo}
+            onRedo={redo}
+            onClear={handleClear}
+            onLayersToggle={() => setShowLayers(v => !v)}
+            onPanelToggle={() => setPanelVisible(v => !v)}
+            panelVisible={panelVisible}
+            canUndo={history.length > 0}
+            canRedo={redoStack.length > 0}
+            position="left"
+          />
+        )}
 
         <View style={styles.centerColumn}>
           {/* Canvas area */}
@@ -422,6 +456,20 @@ export default function EditorScreen() {
           visible={panelVisible}
           canvasId={id}
         />
+
+        {toolbarRight && (
+          <ToolBar
+            onUndo={undo}
+            onRedo={redo}
+            onClear={handleClear}
+            onLayersToggle={() => setShowLayers(v => !v)}
+            onPanelToggle={() => setPanelVisible(v => !v)}
+            panelVisible={panelVisible}
+            canUndo={history.length > 0}
+            canRedo={redoStack.length > 0}
+            position="right"
+          />
+        )}
       </View>
 
       {/* Recording indicator */}

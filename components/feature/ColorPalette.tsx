@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Pressable, Text, ScrollView, TextInput,
   Modal, FlatList, TouchableOpacity, PanResponder,
@@ -7,6 +7,10 @@ import {
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Circle, Path, G, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { useCanvas } from '@/hooks/useCanvas';
+import {
+  CustomPalette, getRecentColors, saveRecentColors,
+  getCustomPalettes, saveCustomPalettes,
+} from '@/services/paletteService';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 // ─── Color data ───────────────────────────────────────────────────────────────
@@ -134,11 +138,6 @@ function ColorWheel({ hue, saturation, onHSChange }: {
 }
 
 // ─── Custom palette storage ───────────────────────────────────────────────────
-interface CustomPalette {
-  id: string;
-  name: string;
-  colors: string[];
-}
 
 // ─── Main ColorPalette component ─────────────────────────────────────────────
 const ColorPalette: React.FC = () => {
@@ -156,6 +155,25 @@ const ColorPalette: React.FC = () => {
   const [editingPalette, setEditingPalette] = useState<CustomPalette | null>(null);
   const [newPaletteName, setNewPaletteName] = useState('');
   const [showNewPaletteModal, setShowNewPaletteModal] = useState(false);
+  const hydrated = useRef(false);
+
+  // Load persisted colors/palettes once, then persist every change so they
+  // survive leaving the editor or restarting the app.
+  useEffect(() => {
+    Promise.all([getRecentColors(), getCustomPalettes()]).then(([recent, palettes]) => {
+      setRecentColors(recent);
+      setCustomPalettes(palettes);
+      hydrated.current = true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (hydrated.current) saveRecentColors(recentColors);
+  }, [recentColors]);
+
+  useEffect(() => {
+    if (hydrated.current) saveCustomPalettes(customPalettes);
+  }, [customPalettes]);
 
   const selectColor = useCallback((color: string) => {
     setActiveColor(color);

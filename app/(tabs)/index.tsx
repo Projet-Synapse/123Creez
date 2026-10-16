@@ -363,7 +363,7 @@ export default function VaultScreen() {
   const [customWidth, setCustomWidth] = useState('1080');
   const [customHeight, setCustomHeight] = useState('1080');
   const [dimStep, setDimStep] = useState<'dims' | 'name'>('dims');
-  // Import d'image à la création : dataURL + dimensions de l'image source.
+  // Import d’image à la création : dataURL + dimensions de l’image source.
   const [importedSrc, setImportedSrc] = useState<string | null>(null);
   const [importedDims, setImportedDims] = useState<{ w: number; h: number } | null>(null);
 
@@ -454,7 +454,7 @@ export default function VaultScreen() {
     setShowNewCanvas(true);
   }, []);
 
-  // Import d'image : picker (type image) -> dataURL (PNG conservé, donc
+  // Import d’image : picker (type image) -> dataURL (PNG conservé, donc
   // transparence préservée) -> dimensions -> étape nom.
   const handlePickImage = useCallback(async () => {
     try {
@@ -951,13 +951,13 @@ export default function VaultScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.importBtnTitle, { color: theme.accent }]}>Importer une image</Text>
                     <Text style={[styles.importBtnSub, { color: theme.textMuted }]}>
-                      PNG (transparence), JPG… — la toile prend la taille de l'image
+                      PNG (transparence), JPG… — la toile prend la taille de l’image
                     </Text>
                   </View>
                   <MaterialCommunityIcons name="chevron-right" size={16} color={theme.textMuted} />
                 </Pressable>
 
-                <Text style={styles.dimLabel}>Ou partir d'un format vierge</Text>
+                <Text style={styles.dimLabel}>Ou partir d’un format vierge</Text>
                 <View style={styles.presetGrid}>
                   {DIM_PRESETS.map(p => {
                     const isActive = selectedPreset.label === p.label;

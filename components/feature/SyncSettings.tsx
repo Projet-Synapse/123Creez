@@ -21,7 +21,7 @@ import {
 import { SUPABASE_SETUP_SQL } from '@/services/supabaseSetupSql';
 
 // Projet « Projet Synapse » — pages du dashboard pour les deux réglages
-// une-seule-fois (l'éditeur SQL et les Redirect URLs vivent côté dashboard ;
+// une-seule-fois (l’éditeur SQL et les Redirect URLs vivent côté dashboard ;
 // tout le contenu à coller est préparé ici par boutons de copie).
 const PROJECT_REF = 'lcfbzfsfubegppsyzkeb';
 const DASHBOARD_SQL_URL = `https://supabase.com/dashboard/project/${PROJECT_REF}/sql/new`;
@@ -87,7 +87,7 @@ export const AccountCard: React.FC = () => {
   if (!available) {
     return (
       <Text style={[styles.hint, { color: theme.textMuted }]}>
-        Connexion disponible dans l'application de bureau uniquement.
+        Connexion disponible dans l’application de bureau uniquement.
       </Text>
     );
   }
@@ -167,7 +167,7 @@ export const SupabaseSetupSteps: React.FC = () => {
       <Text style={[styles.hint, { color: theme.textMuted }]}>
         Deux réglages à poser une seule fois dans le dashboard Supabase
         (projet « Projet Synapse ») — le contenu à coller est copié
-        automatiquement, tu n'as qu'à coller dans la page qui s'ouvre.
+        automatiquement, tu n’as qu’à coller dans la page qui s’ouvre.
       </Text>
 
       <Step n={1} title="Créer les tables (SQL)" />
@@ -176,7 +176,7 @@ export const SupabaseSetupSteps: React.FC = () => {
         onPress={() => copyAndOpen('sql', SUPABASE_SETUP_SQL, DASHBOARD_SQL_URL)}
       >
         <MaterialCommunityIcons name="content-copy" size={15} color={theme.textSecondary} />
-        <Text style={[styles.btnText, { color: theme.textSecondary }]}>Copier le SQL + ouvrir l'éditeur</Text>
+        <Text style={[styles.btnText, { color: theme.textSecondary }]}>Copier le SQL + ouvrir l’éditeur</Text>
       </Pressable>
 
       <View style={{ height: Spacing.sm }} />
@@ -187,12 +187,12 @@ export const SupabaseSetupSteps: React.FC = () => {
         onPress={() => copyAndOpen('redirect', APP_CALLBACK_URL, DASHBOARD_AUTH_URLS)}
       >
         <MaterialCommunityIcons name="content-copy" size={15} color={theme.textSecondary} />
-        <Text style={[styles.btnText, { color: theme.textSecondary }]}>Copier l'URL + ouvrir les réglages</Text>
+        <Text style={[styles.btnText, { color: theme.textSecondary }]}>Copier l’URL + ouvrir les réglages</Text>
       </Pressable>
       <Text style={[styles.status, { color: theme.textMuted }]}>
         Dans « Redirect URLs », ajoute : <Text style={{ fontFamily: 'monospace' }}>{APP_CALLBACK_URL}</Text>
       </Text>
-      {copied && <Text style={[styles.status, { color: theme.accent }]}>Copié — colle dans la page qui vient de s'ouvrir.</Text>}
+      {copied && <Text style={[styles.status, { color: theme.accent }]}>Copié — colle dans la page qui vient de s’ouvrir.</Text>}
     </View>
   );
 };
@@ -299,7 +299,7 @@ export const VaultFolderSettings: React.FC = () => {
   if (!vaultFolderAvailable()) {
     return (
       <Text style={[styles.hint, { color: theme.textMuted }]}>
-        Disponible dans l'application de bureau (Windows) uniquement.
+        Disponible dans l’application de bureau (Windows) uniquement.
       </Text>
     );
   }

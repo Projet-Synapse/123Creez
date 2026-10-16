@@ -12,6 +12,8 @@ export interface DesktopBridge {
   /** Turns automatic download + install-on-quit on or off. */
   setAutoUpdate: (enabled: boolean) => void;
   onUpdateEvent: (handler: (event: DesktopUpdateEvent) => void) => () => void;
+  vaultFolder?: DesktopVaultFolder;
+  auth?: DesktopAuth;
 }
 
 export type DesktopUpdateEvent =
@@ -21,6 +23,25 @@ export type DesktopUpdateEvent =
   | { type: 'progress'; percent: number; transferred: number; total: number }
   | { type: 'downloaded'; version: string }
   | { type: 'error'; message: string };
+
+/** Auth Google : pont navigateur-système + protocole app123creez://. */
+export interface DesktopAuth {
+  openExternal: (url: string) => Promise<void>;
+  onCallback: (handler: (url: string) => void) => () => void;
+  /** Callback reçu au démarrage à froid via argv — consommé une seule fois. */
+  takePendingUrl: () => Promise<string | null>;
+}
+
+/** Miroir explorateur : dossier disque lié au vault (desktop uniquement). */
+export interface DesktopVaultFolder {
+  get: () => Promise<string | null>;
+  choose: () => Promise<string | null>;
+  writeImage: (name: string, dataUrl: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+  listImages: () => Promise<{ name: string; path: string; mtime: number }[]>;
+  readImage: (filePath: string) => Promise<string | null>;
+  deleteImage: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
+  onEvent: (handler: (event: { type: string; filename?: string }) => void) => () => void;
+}
 
 declare global {
   var creezDesktop: DesktopBridge | undefined;

@@ -55,6 +55,8 @@ export function isNewer(candidate: string, current: string): boolean {
 interface GithubRelease {
   tag_name?: string;
   body?: string | null;
+  html_url?: string;
+  assets?: { name?: string; browser_download_url?: string }[];
 }
 
 /** Reads the newest published release from the repository's GitHub feed. */
@@ -68,6 +70,12 @@ async function fetchLatestRelease(): Promise<GithubRelease | null> {
   } catch {
     return null;
   }
+}
+
+/** L'APK Android joint à la release (lien direct de téléchargement). */
+function findApkUrl(release: GithubRelease | null): string | null {
+  const apk = (release?.assets ?? []).find(a => a.name === '123Creez.apk');
+  return apk?.browser_download_url ?? null;
 }
 
 export function initialState(): UpdateState {
@@ -116,7 +124,8 @@ async function checkDesktop(base: UpdateState): Promise<UpdateState> {
   return { ...base, latestVersion: version, stage: 'available' };
 }
 
-/** Mobile and browser fallback: no self-install, point at the release page. */
+/** Mobile and browser fallback: no self-install — point at the direct APK
+    when the release ships one, at the release page otherwise. */
 async function checkRemote(base: UpdateState): Promise<UpdateState> {
   const release = await fetchLatestRelease();
   const version = release?.tag_name;
@@ -127,7 +136,7 @@ async function checkRemote(base: UpdateState): Promise<UpdateState> {
     ...base,
     latestVersion: normalise(version) ?? undefined,
     releaseNotes: release?.body ?? undefined,
-    downloadUrl: RELEASES_URL,
+    downloadUrl: findApkUrl(release) ?? RELEASES_URL,
     stage: 'available',
   };
 }

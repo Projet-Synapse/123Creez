@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/hooks/useTheme';
+import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
 import { useAlert } from '@/template';
 import { useUpdates } from '@/hooks/useUpdates';
 import { RELEASES_URL } from '@/constants/config';
@@ -110,12 +111,13 @@ export default function SettingsScreen() {
 
   const SECTIONS = [
     { id: 'appearance', label: 'Apparence', icon: 'palette-outline' },
-    { id: 'workspace', label: 'Espace de travail', icon: 'brush-outline' },
+    { id: 'workspace', label: 'Espace de travail', icon: 'brush' },
     { id: 'tools', label: 'Outils & Pinceau', icon: 'pencil-outline' },
     { id: 'interface', label: 'Interface', icon: 'view-dashboard-outline' },
-    { id: 'performance', label: 'Performance', icon: 'speedometer-outline' },
+    { id: 'performance', label: 'Performance', icon: 'speedometer' },
     { id: 'storage', label: 'Stockage & Vault', icon: 'folder-outline' },
     { id: 'updates', label: 'Mises à jour', icon: 'update' },
+    { id: 'sync', label: 'Synchronisation', icon: 'cloud-sync-outline' },
     { id: 'accessibility', label: 'Accessibilité', icon: 'eye-outline' },
   ];
 
@@ -346,7 +348,7 @@ export default function SettingsScreen() {
                 ) : storageInfo ? (
                   <>
                     <View style={styles.storageRow}>
-                      <MaterialCommunityIcons name="brush-outline" size={20} color={theme.accent} />
+                      <MaterialCommunityIcons name="brush" size={20} color={theme.accent} />
                       <Text style={[styles.storageLabel, { color: theme.textPrimary }]}>Toiles</Text>
                       <Text style={[styles.storageVal, { color: theme.accent }]}>{storageInfo.canvasCount}</Text>
                     </View>
@@ -493,6 +495,31 @@ export default function SettingsScreen() {
                   Télécharge les nouvelles versions en arrière-plan et les installe à la fermeture de
                   l&apos;application.
                 </Text>
+              </Card>
+            </View>
+          )}
+
+          {/* ─── Synchronisation & dossier vault ─── */}
+          {activeSection === 'sync' && (
+            <View style={styles.section}>
+              <SectionTitle label="Compte" theme={theme} />
+              <Card theme={theme}>
+                <AccountCard />
+              </Card>
+
+              <SectionTitle label="Mise en place (une seule fois)" theme={theme} />
+              <Card theme={theme}>
+                <SupabaseSetupSteps />
+              </Card>
+
+              <SectionTitle label="Synchronisation Supabase" theme={theme} />
+              <Card theme={theme}>
+                <SyncSettings />
+              </Card>
+
+              <SectionTitle label="Dossier du vault (explorateur)" theme={theme} />
+              <Card theme={theme}>
+                <VaultFolderSettings />
               </Card>
             </View>
           )}

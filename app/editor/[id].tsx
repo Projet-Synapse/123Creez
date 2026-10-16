@@ -34,10 +34,11 @@ export default function EditorScreen() {
   const { showAlert } = useAlert();
   const { theme, settings } = useTheme();
   const {
-    history, redoStack, undo, redo, clearCanvas, loadLayers, layers,
+    history, redoStack, undo, redo, clearCanvas, loadLayers, layers, layerGroups,
     activeLayerId, isDirty, markClean, setActiveTool, setActiveColor,
     setBrushSize, fillLayer, clearLayer, brushSize, setBrushOpacity,
-    brushOpacity, activeTool, activeColor, clearSelection,
+    brushOpacity, activeTool, activeColor, clearSelection, commitSelection,
+    selection,
   } = useCanvas();
   const { loadCanvasData, persistCanvas, canvases } = useVault();
   const { runTrigger, recording } = useAutomation();
@@ -71,7 +72,7 @@ export default function EditorScreen() {
   useEffect(() => {
     if (!id) return;
     loadCanvasData(id).then(async data => {
-      if (data) loadLayers(data.meta.id, data.layers, data.activeLayerId);
+      if (data) loadLayers(data.meta.id, data.layers, data.activeLayerId, data.groups);
       setCanvasLoaded(true);
       runTrigger('on_open', {
         setTool: (t) => setActiveTool(t as Tool),
@@ -87,10 +88,14 @@ export default function EditorScreen() {
 
   // Auto-save
   const save = useCallback(async () => {
-    if (!id || !isDirty) return;
-    await persistCanvas(id, layers, activeLayerId);
+    if (!id) return;
+    // A floating lasso move isn't in the stroke data yet — bake it in first
+    // so what gets persisted matches what's on screen.
+    const committed = commitSelection();
+    if (!isDirty && !committed) return;
+    await persistCanvas(id, committed ?? layers, activeLayerId, layerGroups);
     markClean();
-  }, [id, isDirty, layers, activeLayerId, persistCanvas, markClean]);
+  }, [id, isDirty, layers, activeLayerId, persistCanvas, markClean, commitSelection]);
 
   useEffect(() => {
     const interval = settings.autoSaveInterval;
@@ -127,10 +132,11 @@ export default function EditorScreen() {
   }, [save, router]);
 
   const handleSave = useCallback(async () => {
-    await persistCanvas(id!, layers, activeLayerId);
+    const committed = commitSelection();
+    await persistCanvas(id!, committed ?? layers, activeLayerId, layerGroups);
     markClean();
     showAlert('Sauvegardé', 'La toile a été enregistrée dans le vault.');
-  }, [id, layers, activeLayerId, persistCanvas, markClean, showAlert]);
+  }, [id, layers, activeLayerId, persistCanvas, markClean, showAlert, commitSelection]);
 
   const handleClear = useCallback(() => {
     showAlert('Effacer le canvas', 'Voulez-vous effacer tous les calques ?', [
@@ -294,7 +300,7 @@ export default function EditorScreen() {
             onLayersToggle={() => setShowLayers(v => !v)}
             onPanelToggle={() => setPanelVisible(v => !v)}
             panelVisible={panelVisible}
-            canUndo={history.length > 0}
+            canUndo={history.length > 0 || !!selection}
             canRedo={redoStack.length > 0}
             position="left"
           />
@@ -465,7 +471,7 @@ export default function EditorScreen() {
             onLayersToggle={() => setShowLayers(v => !v)}
             onPanelToggle={() => setPanelVisible(v => !v)}
             panelVisible={panelVisible}
-            canUndo={history.length > 0}
+            canUndo={history.length > 0 || !!selection}
             canRedo={redoStack.length > 0}
             position="right"
           />

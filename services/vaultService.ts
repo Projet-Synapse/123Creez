@@ -12,13 +12,25 @@ export interface CanvasMeta {
   height: number;
   thumbnailColor: string;
   strokeCount: number;
+  /** Raster preview (JPEG data URL) rendered from the strokes — generated
+      lazily by the vault so older canvases get one too. */
+  thumbnail?: string;
+  /** Timestamp of the thumbnail generation; a canvas is stale when
+      updatedAt > thumbAt. */
+  thumbAt?: number;
+  /** Manual sort position (drag & drop). Lower = earlier. */
+  order?: number;
 }
 
 export interface CanvasData {
   meta: CanvasMeta;
   layers: Layer[];
   activeLayerId: string;
+  /** Groupes organisationnels de calques (absent sur les anciennes toiles). */
+  groups?: import('@/contexts/CanvasContext').LayerGroup[];
 }
+
+export type FolderPreviewMode = 'recent' | 'mosaic' | 'classic';
 
 export interface Folder {
   id: string;
@@ -26,6 +38,10 @@ export interface Folder {
   parentId: string | null;
   createdAt: number;
   color: string;
+  /** Manual sort position (drag & drop). Lower = earlier. */
+  order?: number;
+  /** How the folder card shows its content (per-folder preference). */
+  previewMode?: FolderPreviewMode;
 }
 
 const KEYS = {
@@ -109,6 +125,44 @@ export async function moveCanvasToFolder(id: string, folderId: string | null): P
   meta.folderId = folderId;
   meta.updatedAt = Date.now();
   await saveCanvasMetas(metas);
+}
+
+export async function setCanvasThumbnail(id: string, thumbnail: string): Promise<void> {
+  const metas = await getCanvasMetas();
+  const meta = metas.find(m => m.id === id);
+  if (!meta) return;
+  meta.thumbnail = thumbnail;
+  meta.thumbAt = Date.now();
+  await saveCanvasMetas(metas);
+}
+
+/** Persists a manual drag & drop ordering (index in the list = order). */
+export async function setCanvasOrder(orderedIds: string[]): Promise<void> {
+  const metas = await getCanvasMetas();
+  const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
+  for (const meta of metas) {
+    const r = rank.get(meta.id);
+    if (r !== undefined) meta.order = r;
+  }
+  await saveCanvasMetas(metas);
+}
+
+export async function setFoldersOrder(orderedIds: string[]): Promise<void> {
+  const folders = await getFolders();
+  const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
+  for (const folder of folders) {
+    const r = rank.get(folder.id);
+    if (r !== undefined) folder.order = r;
+    await saveFolder(folder);
+  }
+}
+
+export async function setFolderPreviewMode(id: string, mode: FolderPreviewMode): Promise<void> {
+  const folders = await getFolders();
+  const folder = folders.find(f => f.id === id);
+  if (!folder) return;
+  folder.previewMode = mode;
+  await saveFolder(folder);
 }
 
 export function generateId(prefix: string): string {

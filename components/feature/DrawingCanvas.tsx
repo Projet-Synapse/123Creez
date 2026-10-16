@@ -4,8 +4,7 @@ import {
   View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
 } from 'react-native';
 import Svg, {
-  Path, Rect, Line, Circle, Defs, ClipPath,
-  Polyline, G, Mask,
+  Rect, Line, Circle, Defs, Mask, Polyline, Polygon, G, Path,
 } from 'react-native-svg';
 import Animated, {
   useAnimatedStyle, useSharedValue,
@@ -13,7 +12,12 @@ import Animated, {
 import { captureRef } from 'react-native-view-shot';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
-import { StrokePath, Tool } from '@/contexts/CanvasContext';
+import { CanvasArt, buildSvgPath } from '@/components/feature/CanvasArt';
+
+function getStrokeLinecap(tool: string): 'round' | 'square' | 'butt' {
+  if (tool === 'pencil') return 'square';
+  return 'round';
+}
 
 interface Props {
   width: number;
@@ -37,31 +41,7 @@ export interface DrawingCanvasHandle {
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 10;
 
-// ─── SVG path builder ────────────────────────────────────────────────────────
-function buildSvgPath(stroke: StrokePath): string {
-  if (stroke.tool === 'fill') return '';
-  const pts = stroke.points;
-  if (pts.length === 0) return '';
-  if (pts.length === 1) {
-    return `M ${pts[0].x} ${pts[0].y} L ${pts[0].x + 0.1} ${pts[0].y + 0.1}`;
-  }
-  let d = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i - 1];
-    const curr = pts[i];
-    const mx = (prev.x + curr.x) / 2;
-    const my = (prev.y + curr.y) / 2;
-    d += ` Q ${prev.x} ${prev.y} ${mx} ${my}`;
-  }
-  const last = pts[pts.length - 1];
-  d += ` L ${last.x} ${last.y}`;
-  return d;
-}
-
-function getStrokeLinecap(tool: string): 'round' | 'square' | 'butt' {
-  if (tool === 'pencil') return 'square';
-  return 'round';
-}
+const SEL_COLOR = '#4ecdc4';
 
 // ─── Overlays ────────────────────────────────────────────────────────────────
 function GridOverlay({ width, height, color }: { width: number; height: number; color: string }) {
@@ -109,111 +89,6 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
   );
 }
 
-// ─── Layer renderer with proper eraser support ───────────────────────────────
-// The eraser uses a SVG mask approach: paint strokes normally, then "cut out"
-// eraser strokes using a white mask (white = visible, black = erased).
-function LayerRenderer({
-  layer,
-  width,
-  height,
-  bgColor,
-  isTransparent,
-}: {
-  layer: { id: string; visible: boolean; opacity: number; strokes: StrokePath[] };
-  width: number;
-  height: number;
-  bgColor: string;
-  isTransparent: boolean;
-}) {
-  if (!layer.visible) return null;
-
-  const maskId = `mask-${layer.id}`;
-  const drawStrokes = layer.strokes.filter(s => s.tool !== 'fill' && s.tool !== 'eraser');
-  const eraserStrokes = layer.strokes.filter(s => s.tool === 'eraser');
-  const fillStrokes = layer.strokes.filter(s => s.tool === 'fill');
-
-  return (
-    <G opacity={layer.opacity}>
-      {/* Fill rect */}
-      {fillStrokes.length > 0 && (() => {
-        const lastFill = fillStrokes[fillStrokes.length - 1];
-        return (
-          <Rect
-            x={0} y={0} width={width} height={height}
-            fill={lastFill.color}
-            opacity={lastFill.opacity}
-          />
-        );
-      })()}
-
-      {eraserStrokes.length > 0 ? (
-        <>
-          {/* Mask: white=show, black=erased */}
-          <Defs>
-            <Mask id={maskId} x="0" y="0" width={width} height={height}>
-              {/* Start with full white (everything visible) */}
-              <Rect x={0} y={0} width={width} height={height} fill="white" />
-              {/* Eraser strokes are painted black to cut out */}
-              {eraserStrokes.map(stroke => {
-                const d = buildSvgPath(stroke);
-                if (!d) return null;
-                return (
-                  <Path
-                    key={stroke.id}
-                    d={d}
-                    stroke="black"
-                    strokeWidth={stroke.size}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    fill="none"
-                  />
-                );
-              })}
-            </Mask>
-          </Defs>
-          {/* Draw strokes with mask applied — only paint strokes are masked */}
-          <G mask={`url(#${maskId})`}>
-            {drawStrokes.map(stroke => {
-              const d = buildSvgPath(stroke);
-              if (!d) return null;
-              return (
-                <Path
-                  key={stroke.id}
-                  d={d}
-                  stroke={stroke.color}
-                  strokeWidth={stroke.size}
-                  strokeLinecap={getStrokeLinecap(stroke.tool)}
-                  strokeLinejoin="round"
-                  strokeOpacity={stroke.opacity}
-                  fill="none"
-                />
-              );
-            })}
-          </G>
-        </>
-      ) : (
-        // No erasers — render normally
-        drawStrokes.map(stroke => {
-          const d = buildSvgPath(stroke);
-          if (!d) return null;
-          return (
-            <Path
-              key={stroke.id}
-              d={d}
-              stroke={stroke.color}
-              strokeWidth={stroke.size}
-              strokeLinecap={getStrokeLinecap(stroke.tool)}
-              strokeLinejoin="round"
-              strokeOpacity={stroke.opacity}
-              fill="none"
-            />
-          );
-        })
-      )}
-    </G>
-  );
-}
-
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
 const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange }, ref) => {
   const {
@@ -221,7 +96,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     fillLayer, activeTool, activeLayerId, activeColor,
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
-    moveSelection, snapshotHistory,
+    moveSelection, snapshotHistory, pickLayerAt,
   } = useCanvas();
   const { settings } = useTheme();
 
@@ -246,6 +121,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const endLassoRef = useRef(endLasso);
   const moveSelectionRef = useRef(moveSelection);
   const snapshotHistoryRef = useRef(snapshotHistory);
+  const selectionRef = useRef(selection);
+  const pickLayerAtRef = useRef(pickLayerAt);
   beginStrokeRef.current = beginStroke;
   continueStrokeRef.current = continueStroke;
   endStrokeRef.current = endStroke;
@@ -255,6 +132,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   endLassoRef.current = endLasso;
   moveSelectionRef.current = moveSelection;
   snapshotHistoryRef.current = snapshotHistory;
+  selectionRef.current = selection;
+  pickLayerAtRef.current = pickLayerAt;
 
   // ─── Zoom & Pan ───────────────────────────────────────────────────
   const scale = useSharedValue(1);
@@ -448,6 +327,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           return;
         }
 
+        // Doigt : sélectionne le calque sous le point, ne dessine jamais.
+        if (tool === 'pick') {
+          const c = toCanvasCoords(pageX, pageY);
+          pickLayerAtRef.current(c.x, c.y);
+          return;
+        }
+
         if (tool === 'lasso') {
           isDrawing.current = true;
           const c = toCanvasCoords(pageX, pageY);
@@ -513,7 +399,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
 
-        if (tool === 'fill') return;
+        if (tool === 'fill' || tool === 'pick') return;
 
         if (tool === 'lasso') {
           const c = toCanvasCoords(pageX, pageY);
@@ -526,10 +412,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           const ddx = c.x - moveLastX.current;
           const ddy = c.y - moveLastY.current;
           // One history snapshot per drag gesture, taken on the first actual
-          // movement — undo rolls back the whole move, and a plain tap
-          // without dragging doesn't pollute the history.
-          if ((ddx !== 0 || ddy !== 0) && !moveSnapshotTaken.current) {
+          // movement — and only for the whole-layer move path: a floating
+          // lasso selection doesn't mutate strokes during the drag (the cut
+          // is snapshotted once at commit time instead).
+          if ((ddx !== 0 || ddy !== 0) && !moveSnapshotTaken.current && !selectionRef.current) {
             snapshotHistoryRef.current();
+          }
+          if ((ddx !== 0 || ddy !== 0)) {
             moveSnapshotTaken.current = true;
           }
           moveSelectionRef.current(ddx, ddy);
@@ -585,7 +474,22 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
   // Current stroke eraser indicator
   const currentEraserStroke = currentStroke && currentStroke.tool === 'eraser';
-  const currentMaskId = 'mask-current';
+
+  // ─── Floating selection rendering ─────────────────────────────────
+  // While a lasso selection is being dragged, the active layer is painted
+  // twice: once masked to the OUTSIDE of the polygon (stays in place) and
+  // once translated, masked to the INSIDE. Fills are never part of the move
+  // — the canvas background stays put. Committing the selection splits the
+  // strokes for real (CanvasContext.commitSelection).
+  const selPolygonPoints = selection
+    ? selection.points.map(p => `${p.x + selection.offset.x},${p.y + selection.offset.y}`).join(' ')
+    : '';
+  const basePolygonPoints = selection
+    ? selection.points.map(p => `${p.x},${p.y}`).join(' ')
+    : '';
+  const selMaskBase = `sel-mask-${width}x${height}`;
+  const activeLayers = layers.filter(l => l.id === activeLayerId);
+  const floating = !!selection && (selection.offset.x !== 0 || selection.offset.y !== 0);
 
   if (width <= 0 || height <= 0) return null;
 
@@ -612,17 +516,55 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           {showGrid && <GridOverlay width={width} height={height} color={overlayColor} />}
           {showDots && <DotsOverlay width={width} height={height} color={overlayColor} />}
 
-          {/* Layers with correct eraser via SVG mask */}
-          {layers.map(layer => (
-            <LayerRenderer
-              key={layer.id}
-              layer={layer}
-              width={width}
-              height={height}
-              bgColor={bgColor}
-              isTransparent={isTransparent}
-            />
-          ))}
+          {/* Selection masks (outside = keep in place, inside = moves) */}
+          {selection && (
+            <Defs>
+              <Mask id={`${selMaskBase}-out`} x="0" y="0" width={width} height={height}>
+                <Rect x={0} y={0} width={width} height={height} fill="white" />
+                <Polygon points={basePolygonPoints} fill="black" />
+              </Mask>
+              <Mask id={`${selMaskBase}-in`} x="0" y="0" width={width} height={height}>
+                <Rect x={0} y={0} width={width} height={height} fill="black" />
+                <Polygon points={selPolygonPoints} fill="white" />
+              </Mask>
+            </Defs>
+          )}
+
+          {/* Layers. The active layer renders in two masked halves while a
+              selection is being dragged; everything else paints normally. */}
+          {layers.map(layer => {
+            if (layer.id !== activeLayerId || !floating) {
+              return (
+                <CanvasArt
+                  key={layer.id}
+                  layers={[layer]}
+                  width={width}
+                  height={height}
+                  variant={layer.id}
+                />
+              );
+            }
+            return (
+              <G key={layer.id}>
+                <CanvasArt
+                  layers={[layer]}
+                  width={width}
+                  height={height}
+                  variant={`${layer.id}-out`}
+                  maskId={`${selMaskBase}-out`}
+                />
+                <CanvasArt
+                  layers={[layer]}
+                  width={width}
+                  height={height}
+                  variant={`${layer.id}-in`}
+                  includeFill={false}
+                  maskId={`${selMaskBase}-in`}
+                  translate={selection!.offset}
+                />
+              </G>
+            );
+          })}
 
           {/* Current stroke preview */}
           {currentStroke && (() => {
@@ -656,11 +598,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
             );
           })()}
 
-          {/* Lasso preview */}
+          {/* Lasso preview (freeform, while drawing) */}
           {currentLassoPoints.length > 1 && (
             <Polyline
               points={currentLassoPoints.map(p => `${p.x},${p.y}`).join(' ')}
-              stroke="#4ecdc4"
+              stroke={SEL_COLOR}
               strokeWidth={1.5}
               strokeDasharray="6,4"
               fill="rgba(78,205,196,0.08)"
@@ -669,26 +611,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
             />
           )}
 
-          {/* Selection rect */}
+          {/* Active selection: the actual hand-drawn outline, translated
+              live while dragged — no bounding box, no handles. */}
           {selection && (
-            <>
-              <Rect
-                x={selection.x} y={selection.y}
-                width={selection.width} height={selection.height}
-                fill="rgba(78,205,196,0.08)"
-                stroke="#4ecdc4"
-                strokeWidth={1.5}
-                strokeDasharray="6,4"
-              />
-              {[
-                [selection.x, selection.y],
-                [selection.x + selection.width, selection.y],
-                [selection.x, selection.y + selection.height],
-                [selection.x + selection.width, selection.y + selection.height],
-              ].map(([cx, cy], i) => (
-                <Circle key={i} cx={cx} cy={cy} r={5} fill="#4ecdc4" stroke="#fff" strokeWidth={1.5} />
-              ))}
-            </>
+            <Polygon
+              points={selPolygonPoints}
+              stroke={SEL_COLOR}
+              strokeWidth={1.5}
+              strokeDasharray="6,4"
+              fill="rgba(78,205,196,0.05)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           )}
         </Svg>
       </Animated.View>

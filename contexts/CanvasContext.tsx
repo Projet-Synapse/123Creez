@@ -4,8 +4,20 @@ import React, {
   ReactNode, useRef,
 } from 'react';
 import { useTheme } from '@/hooks/useTheme';
+import { splitStrokesByPolygon, Point, distanceToStroke } from '@/services/selectionService';
 
-export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move';
+export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move' | 'pick';
+
+/** Image posée sur un calque (import du dossier vault). Coordonnées canvas. */
+export interface LayerImage {
+  id: string;
+  /** dataURL PNG/JPG — autoporteur, survit à la sync. */
+  src: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface Layer {
   id: string;
@@ -13,6 +25,16 @@ export interface Layer {
   visible: boolean;
   opacity: number;
   strokes: StrokePath[];
+  /** Images de fond (importées du dossier vault), peintes sous les traits. */
+  images?: LayerImage[];
+  /** Organisational group (no effect on stacking order). */
+  groupId?: string | null;
+}
+
+export interface LayerGroup {
+  id: string;
+  name: string;
+  collapsed?: boolean;
 }
 
 export interface StrokePath {
@@ -25,15 +47,18 @@ export interface StrokePath {
   layerId: string;
 }
 
-export interface SelectionRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+/** A freeform (lasso) selection: the hand-drawn polygon in canvas space plus
+    the live translation applied while the user drags it. The strokes are NOT
+    mutated while the selection floats — `commitSelection` bakes the move in
+    by cutting strokes along the polygon (only what's inside moves). */
+export interface Selection {
+  points: Point[];
+  offset: Point;
 }
 
 interface CanvasContextType {
   layers: Layer[];
+  layerGroups: LayerGroup[];
   activeLayerId: string;
   activeTool: Tool;
   activeColor: string;
@@ -44,7 +69,7 @@ interface CanvasContextType {
   currentStroke: StrokePath | null;
   isDirty: boolean;
   canvasId: string | null;
-  selection: SelectionRect | null;
+  selection: Selection | null;
   currentLassoPoints: { x: number; y: number }[];
 
   setActiveTool: (tool: Tool) => void;
@@ -52,8 +77,12 @@ interface CanvasContextType {
   setBrushSize: (size: number) => void;
   setBrushOpacity: (opacity: number) => void;
   setActiveLayerId: (id: string) => void;
-  setSelection: (sel: SelectionRect | null) => void;
+  setSelection: (sel: Selection | null) => void;
   clearSelection: () => void;
+  /** Bakes a floating selection move into the strokes (cut along the
+      polygon, inside parts translated). Returns the new layers when a move
+      was applied so callers can persist immediately, null otherwise. */
+  commitSelection: () => Layer[] | null;
 
   beginStroke: (x: number, y: number) => void;
   continueStroke: (x: number, y: number) => void;
@@ -71,6 +100,14 @@ interface CanvasContextType {
   removeLayer: (id: string) => void;
   toggleLayerVisibility: (id: string) => void;
   setLayerOpacity: (id: string, opacity: number) => void;
+  /** Doigt : sélectionne le calque visible le plus haut sous le point. */
+  pickLayerAt: (x: number, y: number) => Layer | null;
+  addLayerGroup: (name?: string) => LayerGroup;
+  renameLayerGroup: (id: string, name: string) => void;
+  removeLayerGroup: (id: string) => void;
+  toggleGroupCollapsed: (id: string) => void;
+  setLayerGroup: (layerId: string, groupId: string | null) => void;
+  toggleGroupVisibility: (id: string) => void;
 
   undo: () => void;
   redo: () => void;
@@ -82,7 +119,7 @@ interface CanvasContextType {
   clearLayer: (id: string) => void;
   fillLayer: (layerId: string, color: string) => void;
 
-  loadLayers: (canvasId: string, layers: Layer[], activeLayerId: string) => void;
+  loadLayers: (canvasId: string, layers: Layer[], activeLayerId: string, groups?: LayerGroup[]) => void;
   markClean: () => void;
 }
 
@@ -97,8 +134,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const historyLimit = Math.max(5, settings.historyLimit ?? 30);
   const [canvasId, setCanvasId] = useState<string | null>(null);
   const [layers, setLayers] = useState<Layer[]>(createDefaultLayers());
+  const [layerGroups, setLayerGroups] = useState<LayerGroup[]>([]);
   const [activeLayerId, setActiveLayerId] = useState('layer-1');
-  const [activeTool, setActiveTool] = useState<Tool>('brush');
+  const [activeTool, setActiveToolState] = useState<Tool>('brush');
   const [activeColor, setActiveColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(12);
   const [brushOpacity, setBrushOpacity] = useState(1);
@@ -106,7 +144,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const [redoStack, setRedoStack] = useState<Layer[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<StrokePath | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [selection, setSelection] = useState<SelectionRect | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
   const [currentLassoPoints, setCurrentLassoPoints] = useState<{ x: number; y: number }[]>([]);
 
   const strokeIdRef = useRef(0);
@@ -124,9 +162,52 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   layersRef.current = layers;
   const markClean = useCallback(() => setIsDirty(false), []);
 
-  const loadLayers = useCallback((id: string, newLayers: Layer[], newActiveLayerId: string) => {
+  const activeLayerIdRef = useRef(activeLayerId);
+  activeLayerIdRef.current = activeLayerId;
+  const selectionRef = useRef<Selection | null>(selection);
+  selectionRef.current = selection;
+  // Live offset accumulator for the floating selection. Pointer events fire
+  // faster than React renders, so accumulating through state reads would
+  // drop all but the last delta — this ref is the source of truth during a
+  // drag and is reset wherever the selection is created or cleared.
+  const offsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // ─── Commit ──────────────────────────────────────────────────────────
+  // Bakes a floating selection move into the stroke data. Splitting runs at
+  // commit time (not during the drag) keeps the gesture non-destructive and
+  // lets Ctrl+Z simply discard the float. The selection outline stays in
+  // place with its offset reset — an auto-save can fire mid-drag, and the
+  // drag continues cleanly from the newly-baked positions.
+  const commitSelection = useCallback((): Layer[] | null => {
+    const sel = selectionRef.current;
+    if (!sel) return null;
+    const offset = offsetRef.current;
+    if (offset.x === 0 && offset.y === 0) return null;
+    const base = layersRef.current;
+    const next = base.map(layer =>
+      layer.id === activeLayerIdRef.current
+        ? { ...layer, strokes: splitStrokesByPolygon(layer.strokes, sel.points, offset) }
+        : layer
+    );
+    saveHistory(base);
+    setLayers(next);
+    setSelection({ points: sel.points, offset: { x: 0, y: 0 } });
+    offsetRef.current = { x: 0, y: 0 };
+    markDirty();
+    return next;
+  }, [saveHistory, markDirty]);
+
+  const clearSelection = useCallback(() => {
+    setSelection(null);
+    setCurrentLassoPoints([]);
+    offsetRef.current = { x: 0, y: 0 };
+  }, []);
+
+
+  const loadLayers = useCallback((id: string, newLayers: Layer[], newActiveLayerId: string, newGroups?: LayerGroup[]) => {
     setCanvasId(id);
     setLayers(newLayers);
+    setLayerGroups(newGroups ?? []);
     setActiveLayerId(newActiveLayerId);
     setHistory([]);
     setRedoStack([]);
@@ -137,7 +218,10 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const beginStroke = useCallback((x: number, y: number) => {
-    if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move') return;
+    if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick') return;
+    // Painting while a lasso move is floating would render the new stroke
+    // half-shifted — finalize the move first.
+    commitSelection();
     const id = `stroke-${++strokeIdRef.current}`;
     const stroke: StrokePath = {
       id,
@@ -149,7 +233,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       layerId: activeLayerId,
     };
     setCurrentStroke(stroke);
-  }, [activeTool, activeColor, brushSize, brushOpacity, activeLayerId]);
+  }, [activeTool, activeColor, brushSize, brushOpacity, activeLayerId, commitSelection]);
 
   const continueStroke = useCallback((x: number, y: number) => {
     setCurrentStroke(prev => prev ? { ...prev, points: [...prev.points, { x, y }] } : null);
@@ -173,9 +257,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   // ─── Lasso ───────────────────────────────────────────────────────────
   const beginLasso = useCallback((x: number, y: number) => {
+    // Starting a new lasso finalizes any pending floating move first.
+    commitSelection();
+    offsetRef.current = { x: 0, y: 0 };
     setCurrentLassoPoints([{ x, y }]);
     setSelection(null);
-  }, []);
+  }, [commitSelection]);
 
   const continueLasso = useCallback((x: number, y: number) => {
     setCurrentLassoPoints(prev => [...prev, { x, y }]);
@@ -187,53 +274,111 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         setSelection(null);
         return [];
       }
-      // Compute bounding box of lasso points
-      const xs = pts.map(p => p.x);
-      const ys = pts.map(p => p.y);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
-      setSelection({ x: minX, y: minY, width: maxX - minX, height: maxY - minY });
+      // Drop consecutive duplicates — pointermove fires even without real
+      // movement, and zero-length edges confuse the boundary math.
+      const cleaned: { x: number; y: number }[] = [];
+      for (const p of pts) {
+        const last = cleaned[cleaned.length - 1];
+        if (!last || Math.abs(last.x - p.x) > 0.5 || Math.abs(last.y - p.y) > 0.5) {
+          cleaned.push(p);
+        }
+      }
+      if (cleaned.length < 3) {
+        setSelection(null);
+        return [];
+      }
+      offsetRef.current = { x: 0, y: 0 };
+      setSelection({ points: cleaned, offset: { x: 0, y: 0 } });
       return [];
     });
   }, []);
 
-  const clearSelection = useCallback(() => {
-    setSelection(null);
-    setCurrentLassoPoints([]);
-  }, []);
-
-  // ─── Move ─────────────────────────────────────────────────────────────
-  // With an active selection, only the strokes it covers are moved (fill
-  // strokes cover the whole canvas and are never moved). Without one, the
-  // whole active layer's content moves — the previous behavior moved every
-  // stroke even with a lasso selection, making the lasso useless.
+  // ─── Move ────────────────────────────────────────────────────────────
+  // With an active selection the drag only translates the floating polygon
+  // (the renderer splits inside/outside live); the strokes are cut for real
+  // at commit time. Without one, the whole active layer's content moves.
   const moveSelection = useCallback((dx: number, dy: number) => {
-    const sel = selection;
-    const hit = (stroke: StrokePath) => {
-      if (stroke.tool === 'fill') return false;
-      if (!sel) return true;
-      const pad = stroke.size / 2;
-      return stroke.points.some(p =>
-        p.x >= sel.x - pad && p.x <= sel.x + sel.width + pad &&
-        p.y >= sel.y - pad && p.y <= sel.y + sel.height + pad
-      );
-    };
-    setSelection(prev => prev ? { ...prev, x: prev.x + dx, y: prev.y + dy } : null);
+    const sel = selectionRef.current;
+    if (sel) {
+      offsetRef.current = { x: offsetRef.current.x + dx, y: offsetRef.current.y + dy };
+      setSelection({ ...sel, offset: { ...offsetRef.current } });
+      markDirty();
+      return;
+    }
     setLayers(prev => prev.map(layer => {
-      if (layer.id !== activeLayerId) return layer;
+      if (layer.id !== activeLayerIdRef.current) return layer;
       return {
         ...layer,
-        strokes: layer.strokes.map(stroke => hit(stroke)
-          ? { ...stroke, points: stroke.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
-          : stroke),
+        strokes: layer.strokes.map(stroke => stroke.tool === 'fill'
+          ? stroke
+          : { ...stroke, points: stroke.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }),
       };
     }));
     markDirty();
-  }, [activeLayerId, selection, markDirty]);
+  }, [markDirty]);
+
+  const setActiveTool = useCallback((tool: Tool) => {
+    // A pending floating move is finalized when the user leaves the move
+    // workflow, so the painted result always matches what's on screen.
+    commitSelection();
+    setActiveToolState(tool);
+  }, [commitSelection]);
+
+  // ─── Doigt : hit-test de calque ─────────────────────────────────────
+  // Calque visible le plus HAUT sous le point (fin de tableau = dessus).
+  // Tolérance : demi-épaisseur du trait + 8 px de pretexte de clic.
+  const pickLayerAt = useCallback((x: number, y: number): Layer | null => {
+    const TOLERANCE = 8;
+    for (let li = layersRef.current.length - 1; li >= 0; li--) {
+      const layer = layersRef.current[li];
+      if (!layer.visible) continue;
+      for (const stroke of layer.strokes) {
+        if (stroke.tool === 'fill') continue;
+        if (distanceToStroke(x, y, stroke.points) <= stroke.size / 2 + TOLERANCE) {
+          setActiveLayerId(layer.id);
+          return layer;
+        }
+      }
+    }
+    return null;
+  }, []);
+
+  const addLayerGroup = useCallback((name?: string): LayerGroup => {
+    const group: LayerGroup = { id: `lgroup-${++layerIdRef.current}`, name: name?.trim() || 'Groupe' };
+    setLayerGroups(prev => [...prev, group]);
+    return group;
+  }, []);
+
+  const renameLayerGroup = useCallback((id: string, name: string) => {
+    setLayerGroups(prev => prev.map(g => g.id === id ? { ...g, name } : g));
+  }, []);
+
+  const removeLayerGroup = useCallback((id: string) => {
+    setLayerGroups(prev => prev.filter(g => g.id !== id));
+    setLayers(prev => prev.map(l => l.groupId === id ? { ...l, groupId: null } : l));
+    markDirty();
+  }, [markDirty]);
+
+  const toggleGroupCollapsed = useCallback((id: string) => {
+    setLayerGroups(prev => prev.map(g => g.id === id ? { ...g, collapsed: !g.collapsed } : g));
+  }, []);
+
+  const setLayerGroup = useCallback((layerId: string, groupId: string | null) => {
+    setLayers(prev => prev.map(l => l.id === layerId ? { ...l, groupId } : l));
+    markDirty();
+  }, [markDirty]);
+
+  const toggleGroupVisibility = useCallback((id: string) => {
+    setLayers(prev => {
+      const inGroup = prev.filter(l => l.groupId === id);
+      const anyVisible = inGroup.some(l => l.visible);
+      return prev.map(l => l.groupId === id ? { ...l, visible: !anyVisible } : l);
+    });
+    markDirty();
+  }, [markDirty]);
 
   const fillLayer = useCallback((layerId: string, color: string) => {
+    commitSelection();
     const id = `stroke-fill-${++strokeIdRef.current}`;
     const fillStroke: StrokePath = {
       id, points: [{ x: -1, y: -1 }], color,
@@ -246,9 +391,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       );
     });
     markDirty();
-  }, [brushOpacity, saveHistory, markDirty]);
+  }, [brushOpacity, saveHistory, markDirty, commitSelection]);
 
   const undo = useCallback(() => {
+    // Undo cancels the current float first (nothing was applied yet); with
+    // no live offset it rolls the strokes back normally.
+    const sel = selectionRef.current;
+    if (sel && (offsetRef.current.x !== 0 || offsetRef.current.y !== 0)) {
+      setSelection({ ...sel, offset: { x: 0, y: 0 } });
+      offsetRef.current = { x: 0, y: 0 };
+      return;
+    }
     if (history.length === 0) return;
     setHistory(h => {
       if (h.length === 0) return h;
@@ -262,6 +415,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [history.length, layers, markDirty]);
 
   const redo = useCallback(() => {
+    const sel = selectionRef.current;
+    if (sel && (offsetRef.current.x !== 0 || offsetRef.current.y !== 0)) {
+      setSelection({ ...sel, offset: { x: 0, y: 0 } });
+      offsetRef.current = { x: 0, y: 0 };
+      return;
+    }
     if (redoStack.length === 0) return;
     setRedoStack(r => {
       if (r.length === 0) return r;
@@ -325,15 +484,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   return (
     <CanvasContext.Provider value={{
-      layers, activeLayerId, activeTool, activeColor,
+      layers, layerGroups, activeLayerId, activeTool, activeColor,
       brushSize, brushOpacity, history, redoStack, currentStroke,
       isDirty, canvasId, selection, currentLassoPoints,
       setActiveTool, setActiveColor, setBrushSize, setBrushOpacity,
-      setActiveLayerId, setSelection, clearSelection,
+      setActiveLayerId, setSelection, clearSelection, commitSelection,
       beginStroke, continueStroke, endStroke,
       beginLasso, continueLasso, endLasso,
       moveSelection,
       addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
+      pickLayerAt, addLayerGroup, renameLayerGroup, removeLayerGroup,
+      toggleGroupCollapsed, setLayerGroup, toggleGroupVisibility,
       undo, redo, snapshotHistory, clearCanvas, clearLayer, fillLayer,
       loadLayers, markClean,
     }}>

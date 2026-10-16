@@ -7,12 +7,14 @@ import { VaultProvider } from '@/contexts/VaultContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { AutomationProvider } from '@/contexts/AutomationContext';
 import { UpdateProvider } from '@/contexts/UpdateContext';
+import { AuthProvider } from '@/contexts/AuthContext';
 
 export default function RootLayout() {
   return (
     <AlertProvider>
       <SafeAreaProvider>
         <ThemeProvider>
+          <AuthProvider>
           <UpdateProvider>
           <VaultProvider>
             <AutomationProvider>
@@ -26,6 +28,7 @@ export default function RootLayout() {
           </AutomationProvider>
           </VaultProvider>
           </UpdateProvider>
+          </AuthProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </AlertProvider>

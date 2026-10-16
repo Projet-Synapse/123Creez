@@ -20,6 +20,7 @@ const TOOLS: ToolItem[] = [
   { id: 'fill', icon: 'format-color-fill', label: 'Remplir' },
   { id: 'lasso', icon: 'lasso', label: 'Lasso' },
   { id: 'move', icon: 'cursor-move', label: 'Déplacer' },
+  { id: 'pick', icon: 'gesture-tap', label: 'Doigt' },
 ];
 
 interface ToolBarProps {

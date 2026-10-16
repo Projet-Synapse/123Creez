@@ -1,17 +1,23 @@
 // Powered by OnSpace.AI
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, TextInput,
-  FlatList, ScrollView, Modal, ActivityIndicator,
+  FlatList, ScrollView, Modal, ActivityIndicator, Image,
+  PanResponder, GestureResponderEvent, PanResponderGestureState, useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { FontSize } from '@/constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useVault } from '@/hooks/useVault';
+import * as DocumentPicker from 'expo-document-picker';
+import { readImageSize } from '@/services/vaultFolderService';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
-import { CanvasMeta, Folder } from '@/services/vaultService';
+import { CanvasMeta, Folder, FolderPreviewMode, loadCanvas } from '@/services/vaultService';
+import { renderThumbnail } from '@/services/thumbnailService';
 
 const FOLDER_COLORS = ['#4ecdc4', '#ff6b6b', '#ffd700', '#6bcb77', '#7c4dff', '#ff8800', '#00b0ff', '#f48fb1'];
 
@@ -23,36 +29,305 @@ interface DimPreset {
   icon: string;
 }
 
-type SortMode = 'updated' | 'name' | 'created';
+type SortMode = 'manual' | 'updated' | 'name' | 'created';
+type ViewSize = 'compact' | 'medium' | 'large';
 
 const SORT_MODES: { id: SortMode; label: string; icon: string }[] = [
+  { id: 'manual', label: 'Manuel', icon: 'cursor-move' },
   { id: 'updated', label: 'Récent', icon: 'clock-outline' },
   { id: 'name', label: 'Nom', icon: 'sort-alphabetical-ascending' },
-  { id: 'created', label: 'Création', icon: 'calendar-plus-outline' },
+  { id: 'created', label: 'Création', icon: 'calendar-plus' },
 ];
 
+const VIEW_SIZES: { id: ViewSize; label: string; columns: number; icon: string }[] = [
+  { id: 'compact', label: 'Compact', columns: 4, icon: 'view-comfy' },
+  { id: 'medium', label: 'Moyen', columns: 3, icon: 'view-grid-outline' },
+  { id: 'large', label: 'Grand', columns: 2, icon: 'view-dashboard-outline' },
+];
+
+const FOLDER_PREVIEW_LABELS: Record<FolderPreviewMode, string> = {
+  recent: 'Dernière toile',
+  mosaic: 'Mosaïque 2×2',
+  classic: 'Icône seule',
+};
+
 const DIM_PRESETS: DimPreset[] = [
-  { label: 'Portrait HD', width: 1080, height: 1920, icon: 'phone-portrait' },
+  { label: 'Portrait HD', width: 1080, height: 1920, icon: 'cellphone' },
   { label: 'Paysage HD', width: 1920, height: 1080, icon: 'monitor' },
   { label: 'Carré', width: 1080, height: 1080, icon: 'square-outline' },
   { label: 'A4 Portrait', width: 794, height: 1123, icon: 'file-outline' },
-  { label: 'A4 Paysage', width: 1123, height: 794, icon: 'file-rotate-left-outline' },
+  { label: 'A4 Paysage', width: 1123, height: 794, icon: 'rotate-left' },
   { label: '2K', width: 2560, height: 1440, icon: 'television' },
   { label: 'Vignette', width: 400, height: 400, icon: 'image-filter-frames' },
   { label: 'Personnalisé', width: 0, height: 0, icon: 'pencil-ruler' },
 ];
+
+interface CardLayout {
+  x: number; y: number; width: number; height: number;
+}
+
+const GRID_GAP = 10;
+
+// ─── Shared card gesture handling ─────────────────────────────────────────────
+// Mouse-first drag: a horizontal-ish press+move grabs the card (vertical
+// swipes still scroll the page); once grabbed, the drag can steer anywhere.
+// A clean release without movement is the tap; holding still ~550ms opens
+// the context menu. Callbacks flow through refs to dodge stale closures.
+interface CardGesturesOpts {
+  onTap: () => void;
+  onLongPress: () => void;
+  onDragStart: () => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: () => void;
+}
+
+function useCardGestures(opts: CardGesturesOpts) {
+  const cb = useRef(opts);
+  cb.current = opts;
+  const moved = useRef(false);
+  const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startedAt = useRef(0);
+
+  return useRef(PanResponder.create({
+    onStartShouldSetPanResponderCapture: (e: GestureResponderEvent) => {
+      // Mouse: claim immediately (the wheel scrolls, and nested Pressables
+      // would otherwise hold the responder and block the steal on move).
+      // Touch: negotiate on move instead so flicks keep scrolling the page.
+      return ((e.nativeEvent as any)?.type ?? '').startsWith('mouse');
+    },
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
+      // Touch path (mouse already claimed on start): horizontal-first, or any
+      // direction once held — quick flicks keep scrolling the page.
+      const dist = Math.hypot(g.dx, g.dy);
+      const held = Date.now() - startedAt.current > 300;
+      return (Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy)) || (held && dist > 10);
+    },
+    onPanResponderGrant: () => {
+      startedAt.current = Date.now();
+      moved.current = false;
+      lpTimer.current = setTimeout(() => {
+        if (!moved.current) cb.current.onLongPress();
+      }, 550);
+    },
+    onPanResponderMove: (e, g) => {
+      if (!moved.current && Math.hypot(g.dx, g.dy) > 8) {
+        moved.current = true;
+        if (lpTimer.current) clearTimeout(lpTimer.current);
+        cb.current.onDragStart();
+      }
+      if (moved.current) {
+        cb.current.onDragMove(e.nativeEvent.pageX, e.nativeEvent.pageY);
+      }
+    },
+    onPanResponderRelease: () => {
+      if (lpTimer.current) clearTimeout(lpTimer.current);
+      if (!moved.current) cb.current.onTap();
+      else cb.current.onDragEnd();
+    },
+    onPanResponderTerminate: () => {
+      // The scroll view stole the gesture (touch scroll): neither a tap nor
+      // a drag — just clean up.
+      if (lpTimer.current) clearTimeout(lpTimer.current);
+      if (moved.current) cb.current.onDragEnd();
+      moved.current = false;
+    },
+    onPanResponderTerminationRequest: () => false,
+  })).current;
+}
+
+interface DragState {
+  kind: 'canvas' | 'folder';
+  id: string;
+  name: string;
+  thumb?: string;
+  x: number;
+  y: number;
+  active: boolean;
+}
+
+// ─── Canvas card: framed preview + title below ────────────────────────────────
+const CanvasCard = React.memo(function CanvasCard({
+  item, thumbH, cellWidth, styles, theme,
+  isDragging, isHovered, renamingName,
+  onTap, onLongPress, onDragStart, onDragMove, onDragEnd,
+  onOpen, onMenu, onRenameSubmit, onRenameChange,
+  registerLayout,
+}: {
+  item: CanvasMeta;
+  thumbH: number;
+  cellWidth: number;
+  styles: any;
+  theme: any;
+  isDragging: boolean;
+  isHovered: boolean;
+  renamingName: string | null;
+  onTap: () => void;
+  onLongPress: () => void;
+  onDragStart: () => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: () => void;
+  onOpen: () => void;
+  onMenu: () => void;
+  onRenameSubmit: () => void;
+  onRenameChange: (name: string) => void;
+  registerLayout: (l: CardLayout) => void;
+}) {
+  const viewRef = useRef<View>(null);
+  const gestures = useCardGestures({
+    onTap,
+    onLongPress,
+    onDragStart,
+    onDragMove,
+    onDragEnd,
+  });
+
+  return (
+    <View
+      ref={viewRef}
+      style={[styles.canvasCell, { width: cellWidth }, isDragging && { opacity: 0.35 }]}
+      onLayout={() => {
+        viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+          registerLayout({ x: px, y: py, width: w, height: h }));
+      }}
+    >
+      <View style={styles.canvasCard}>
+        {/* Gesture area: thumb + texts. The menu button stays OUTSIDE so its
+            press is never swallowed by the drag responder. */}
+        <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
+          <View style={[styles.canvasFrame, { height: thumbH }, isHovered && { borderColor: theme.accent, borderWidth: 2 }]}>
+            {item.thumbnail ? (
+              <Image source={{ uri: item.thumbnail }} style={styles.canvasThumbImg} resizeMode="cover" />
+            ) : (
+              <View style={[styles.canvasThumbPlaceholder, { backgroundColor: item.thumbnailColor || '#ffffff' }]}>
+                {item.strokeCount === 0 ? (
+                  <MaterialCommunityIcons name="brush" size={30} color={theme.textMuted} />
+                ) : (
+                  <View style={styles.thumbInfo}>
+                    <Text style={styles.thumbStrokeCount}>{item.strokeCount}</Text>
+                    <Text style={styles.thumbDims}>{item.width}×{item.height}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+          {renamingName !== null ? (
+            <TextInput
+              style={styles.inlineInput}
+              value={renamingName}
+              onChangeText={onRenameChange}
+              onSubmitEditing={onRenameSubmit}
+              onBlur={onRenameSubmit}
+              autoFocus
+            />
+          ) : (
+            <Text style={styles.canvasName} numberOfLines={1}>{item.name}</Text>
+          )}
+          <Text style={styles.canvasMetaLine}>
+            {new Date(item.updatedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
+            {' · '}{item.width} × {item.height}
+          </Text>
+        </View>
+        <Pressable style={styles.cardMoreBtn} onPress={onMenu} hitSlop={8}>
+          <MaterialCommunityIcons name="dots-vertical" size={16} color="#444" />
+        </Pressable>
+      </View>
+    </View>
+  );
+});
+
+// ─── Folder card: per-folder preview mode ─────────────────────────────────────
+const FolderCard = React.memo(function FolderCard({
+  item, previewThumbs, count, isActive, isDropTarget, styles, theme,
+  onTap, onLongPress, onDragStart, onDragMove, onDragEnd, registerLayout,
+}: {
+  item: Folder;
+  previewThumbs: CanvasMeta[];
+  count: number;
+  isActive: boolean;
+  isDropTarget: boolean;
+  styles: any;
+  theme: any;
+  onTap: () => void;
+  onLongPress: () => void;
+  onDragStart: () => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: () => void;
+  registerLayout: (l: CardLayout) => void;
+}) {
+  const viewRef = useRef<View>(null);
+  const gestures = useCardGestures({ onTap, onLongPress, onDragStart, onDragMove, onDragEnd });
+
+  const mode: FolderPreviewMode = item.previewMode ?? 'recent';
+  const hasPreview = count > 0 && previewThumbs.some(t => t.thumbnail);
+
+  const body = !hasPreview || mode === 'classic' ? (
+    <MaterialCommunityIcons name="folder" size={30} color={item.color} />
+  ) : mode === 'mosaic' ? (
+    <View style={styles.folderMosaic}>
+      {[0, 1, 2, 3].map(i => {
+        const t = previewThumbs[i];
+        return t?.thumbnail
+          ? <Image key={i} source={{ uri: t.thumbnail }} style={styles.folderMosaicCell} />
+          : <View key={i} style={[styles.folderMosaicCell, styles.folderMosaicEmpty]} />;
+      })}
+    </View>
+  ) : (
+    <Image source={{ uri: previewThumbs[0].thumbnail }} style={styles.folderPreviewImg} />
+  );
+
+  const showScrim = hasPreview && mode !== 'classic';
+
+  return (
+    <View
+      ref={viewRef}
+      {...gestures.panHandlers}
+      onLayout={() => {
+        viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+          registerLayout({ x: px, y: py, width: w, height: h }));
+      }}
+    >
+      <View
+        style={[
+          styles.folderCard,
+          isActive && { borderColor: item.color, borderWidth: 2 },
+          isDropTarget && { borderColor: theme.accent, borderWidth: 2 },
+        ]}>
+        {body}
+        {showScrim && (
+          <View style={styles.folderScrim}>
+            <MaterialCommunityIcons name="folder" size={13} color={item.color} />
+            <Text style={styles.folderNameOnImage} numberOfLines={1}>{item.name}</Text>
+          </View>
+        )}
+        {!showScrim && (
+          <Text style={styles.folderName} numberOfLines={2}>{item.name}</Text>
+        )}
+        <Text style={[styles.folderCount, showScrim && styles.folderCountOverlay]}>
+          {count} toile{count !== 1 ? 's' : ''}
+        </Text>
+      </View>
+    </View>
+  );
+});
 
 export default function VaultScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const { showAlert } = useAlert();
-  const { canvases, folders, loading, createCanvas, removeCanvas, renameCanvas,
-    moveCanvas, duplicateCanvas, createFolder, renameFolder, removeFolder } = useVault();
+  const { width: winW } = useWindowDimensions();
+  const {
+    canvases, folders, loading, createCanvas, removeCanvas, renameCanvas,
+    moveCanvas, duplicateCanvas, createFolder, renameFolder, removeFolder,
+    reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,
+    loadCanvasData, createImageCanvas,
+  } = useVault();
 
   const [activeFolderId, setActiveFolderId] = useState<string | 'root'>('root');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortMode, setSortMode] = useState<SortMode>('updated');
+  const [sortMode, setSortMode] = useState<SortMode>('manual');
+  const [viewSize, setViewSize] = useState<ViewSize>('medium');
   const [showNewCanvas, setShowNewCanvas] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -62,22 +337,54 @@ export default function VaultScreen() {
   const [contextMenu, setContextMenu] = useState<{ type: 'canvas' | 'folder'; id: string } | null>(null);
   const [renaming, setRenaming] = useState<{ type: 'canvas' | 'folder'; id: string; name: string } | null>(null);
 
+  // ─── Drag & drop state ────────────────────────────────────────────
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [hoverFolderId, setHoverFolderId] = useState<string | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const cardLayouts = useRef(new Map<string, CardLayout>());
+  // Drop intent is tracked in a plain ref mutated synchronously during the
+  // drag: at 200 px/frame the mouseup can land before React commits the
+  // hover state, so state-mirrored refs would read stale (null) values.
+  const dropIntent = useRef<{ folderId: string | null; index: number | null; active: boolean }>({
+    folderId: null, index: null, active: false,
+  });
+  const dragRef = useRef<DragState | null>(null);
+  dragRef.current = drag;
+  const hoverFolderRef = useRef<string | null>(null);
+  hoverFolderRef.current = hoverFolderId;
+  const hoverIndexRef = useRef<number | null>(null);
+  hoverIndexRef.current = hoverIndex;
+  const visibleRef = useRef<CanvasMeta[]>([]);
+  const rootFoldersRef = useRef<Folder[]>([]);
+  const handleDragEndRef = useRef<(kind: 'canvas' | 'folder', id: string) => void>(() => { });
+
   // Canvas dimensions
   const [selectedPreset, setSelectedPreset] = useState<DimPreset>(DIM_PRESETS[0]);
   const [customWidth, setCustomWidth] = useState('1080');
   const [customHeight, setCustomHeight] = useState('1080');
   const [dimStep, setDimStep] = useState<'dims' | 'name'>('dims');
+  // Import d'image à la création : dataURL + dimensions de l'image source.
+  const [importedSrc, setImportedSrc] = useState<string | null>(null);
+  const [importedDims, setImportedDims] = useState<{ w: number; h: number } | null>(null);
 
   const styles = makeStyles(theme);
+
+  // Restore the preferred card size once.
+  useEffect(() => {
+    AsyncStorage.getItem('vault:viewSize').then(v => {
+      if (v === 'compact' || v === 'medium' || v === 'large') setViewSize(v);
+    }).catch(() => { });
+  }, []);
 
   const trimmedQuery = searchQuery.trim().toLowerCase();
   const isSearching = trimmedQuery.length > 0;
 
-  // Sorting is applied uniformly wherever a canvas list is shown (browsing
-  // or searching) so switching modes behaves predictably everywhere.
+  // Sorting: "Manuel" follows the drag & drop order, the others behave as
+  // before. Sorting applies uniformly wherever a canvas list is shown.
   const sortCanvases = useCallback((list: CanvasMeta[]) => {
     const sorted = [...list];
-    if (sortMode === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name));
+    if (sortMode === 'manual') sorted.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || b.updatedAt - a.updatedAt);
+    else if (sortMode === 'name') sorted.sort((a, b) => a.name.localeCompare(b.name));
     else if (sortMode === 'created') sorted.sort((a, b) => b.createdAt - a.createdAt);
     else sorted.sort((a, b) => b.updatedAt - a.updatedAt);
     return sorted;
@@ -90,6 +397,15 @@ export default function VaultScreen() {
     });
   }, []);
 
+  const cycleViewSize = useCallback(() => {
+    setViewSize(prev => {
+      const idx = VIEW_SIZES.findIndex(v => v.id === prev);
+      const next = VIEW_SIZES[(idx + 1) % VIEW_SIZES.length].id;
+      AsyncStorage.setItem('vault:viewSize', next).catch(() => { });
+      return next;
+    });
+  }, []);
+
   // A search looks across every canvas regardless of folder — finding a
   // canvas by name shouldn't require remembering which folder it's in.
   const searchResults = isSearching
@@ -99,8 +415,23 @@ export default function VaultScreen() {
   const visibleCanvases = sortCanvases(canvases.filter(c =>
     activeFolderId === 'root' ? c.folderId === null : c.folderId === activeFolderId
   ));
-  const rootFolders = folders.filter(f => f.parentId === null);
+  visibleRef.current = visibleCanvases;
+  const rootFolders = folders
+    .filter(f => f.parentId === null)
+    .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.createdAt - b.createdAt);
+  rootFoldersRef.current = rootFolders;
   const activeSortMode = SORT_MODES.find(m => m.id === sortMode)!;
+  const activeView = VIEW_SIZES.find(v => v.id === viewSize)!;
+
+  // Grid geometry: card width from the chosen density, thumbnail height from
+  // the canvas aspect ratio (clamped so extreme formats stay usable).
+  const contentW = Math.min(winW, 1400) - 32;
+  const numColumns = activeView.columns;
+  const colW = Math.floor((contentW - numColumns * GRID_GAP) / numColumns);
+  const thumbHFor = useCallback((item: CanvasMeta) => {
+    const aspect = item.width > 0 ? item.width / item.height : 1;
+    return Math.round(Math.min(260, Math.max(80, colW / aspect)));
+  }, [colW]);
 
   const getCanvasDims = () => {
     if (selectedPreset.label === 'Personnalisé') {
@@ -118,18 +449,53 @@ export default function VaultScreen() {
     setCustomWidth('1080');
     setCustomHeight('1080');
     setDimStep('dims');
+    setImportedSrc(null);
+    setImportedDims(null);
     setShowNewCanvas(true);
   }, []);
 
+  // Import d'image : picker (type image) -> dataURL (PNG conservé, donc
+  // transparence préservée) -> dimensions -> étape nom.
+  const handlePickImage = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'image/*',
+        multiple: false,
+        copyToCacheDirectory: false,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      // expo-document-picker (web, base64 par défaut) renvoie déjà un
+      // dataURL dans asset.uri — PNG conservé, donc transparence préservée.
+      const src = asset.uri;
+      if (!src) return;
+      const dims = await readImageSize(src);
+      setImportedSrc(src);
+      setImportedDims({ w: dims.width, h: dims.height });
+      setDimStep('name');
+    } catch {
+      // pick annulé ou fichier illisible : on reste sur la modale telle quelle
+    }
+  }, []);
+
   const handleCreateCanvas = useCallback(async () => {
-    const name = newName.trim() || 'Toile sans titre';
+    const name = newName.trim() || (importedSrc ? 'Toile importée' : 'Toile sans titre');
+    if (importedSrc) {
+      const id = await createImageCanvas(name, importedSrc);
+      setImportedSrc(null);
+      setImportedDims(null);
+      setShowNewCanvas(false);
+      setNewName('');
+      if (id) router.push(`/editor/${id}`);
+      return;
+    }
     const folderId = activeFolderId === 'root' ? null : activeFolderId;
     const { w, h } = getCanvasDims();
     const id = await createCanvas(name, folderId, w, h);
     setShowNewCanvas(false);
     setNewName('');
     router.push(`/editor/${id}`);
-  }, [newName, activeFolderId, createCanvas, router, selectedPreset, customWidth, customHeight]);
+  }, [newName, activeFolderId, createCanvas, router, selectedPreset, customWidth, customHeight, importedSrc, createImageCanvas]);
 
   const handleCreateFolder = useCallback(async () => {
     const name = newName.trim() || 'Nouveau dossier';
@@ -177,80 +543,156 @@ export default function VaultScreen() {
     setShowMoveModal(true);
   }, []);
 
-  const handleOpenCanvas = useCallback(async (id: string) => {
+  const handleOpenCanvas = useCallback((id: string) => {
     router.push(`/editor/${id}`);
   }, [router]);
 
-  const formatDate = (ts: number) => {
-    const d = new Date(ts);
-    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
-  };
+  // ─── Drag & drop resolution ───────────────────────────────────────
+  const resolveDragMove = useCallback((kind: 'canvas' | 'folder', id: string, x: number, y: number) => {
+    if (kind !== 'canvas') {
+      dropIntent.current = { folderId: null, index: null, active: true };
+      setHoverFolderId(null); setHoverIndex(null);
+      return;
+    }
+    dropIntent.current.active = true;
 
-  const renderFolder = useCallback(({ item }: { item: Folder }) => {
-    const count = canvases.filter(c => c.folderId === item.id).length;
-    const isActive = activeFolderId === item.id;
-    return (
-      <Pressable
-        style={[styles.folderCard, isActive && { borderColor: item.color, borderWidth: 2 }]}
-        onPress={() => setActiveFolderId(item.id)}
-        onLongPress={() => handleContextMenu('folder', item.id)}
-      >
-        <MaterialCommunityIcons name="folder" size={28} color={item.color} />
-        <Text style={styles.folderName} numberOfLines={2}>{item.name}</Text>
-        <Text style={styles.folderCount}>{count} toile{count !== 1 ? 's' : ''}</Text>
-      </Pressable>
-    );
-  }, [activeFolderId, canvases, handleContextMenu, styles]);
+    // Folder under the pointer wins (drop canvas INTO folder).
+    let folderHit: string | null = null;
+    for (const f of rootFoldersRef.current) {
+      const l = cardLayouts.current.get(`folder:${f.id}`);
+      if (l && x >= l.x && x <= l.x + l.width && y >= l.y && y <= l.y + l.height) {
+        folderHit = f.id;
+        break;
+      }
+    }
+    if (folderHit) {
+      dropIntent.current.folderId = folderHit;
+      dropIntent.current.index = null;
+      setHoverFolderId(folderHit);
+      setHoverIndex(null);
+      return;
+    }
 
-  const renderCanvas = useCallback(({ item }: { item: CanvasMeta }) => (
-    <Pressable
-      style={styles.canvasCard}
-      onPress={() => handleOpenCanvas(item.id)}
-      onLongPress={() => handleContextMenu('canvas', item.id)}
-    >
-      <View style={[styles.canvasThumbnail, { backgroundColor: item.thumbnailColor || '#ffffff' }]}>
-        {item.strokeCount === 0 ? (
-          <MaterialCommunityIcons name="brush-outline" size={32} color={theme.textMuted} />
-        ) : (
-          <View style={styles.thumbInfo}>
-            <Text style={styles.thumbStrokeCount}>{item.strokeCount}</Text>
-            <Text style={styles.thumbDims}>{item.width}×{item.height}</Text>
-          </View>
-        )}
-      </View>
-      <View style={styles.canvasInfo}>
-        {renaming?.type === 'canvas' && renaming.id === item.id ? (
-          <TextInput
-            style={styles.inlineInput}
-            value={renaming.name}
-            onChangeText={n => setRenaming(r => r ? { ...r, name: n } : null)}
-            onSubmitEditing={handleRenameSubmit}
-            onBlur={handleRenameSubmit}
-            autoFocus
-          />
-        ) : (
-          <Text style={styles.canvasName} numberOfLines={1}>{item.name}</Text>
-        )}
-        <Text style={styles.canvasDate}>{formatDate(item.updatedAt)}</Text>
-        <Text style={styles.canvasDims}>{item.width} × {item.height} px</Text>
-      </View>
-      <Pressable
-        style={styles.moreBtn}
-        onPress={() => handleContextMenu('canvas', item.id)}
-        hitSlop={8}
-      >
-        <MaterialCommunityIcons name="dots-vertical" size={18} color={theme.textMuted} />
-      </Pressable>
-    </Pressable>
-  ), [renaming, handleOpenCanvas, handleContextMenu, handleRenameSubmit, theme, styles]);
+    // Otherwise find the hovered canvas slot for a reorder.
+    let idx: number | null = null;
+    for (let i = 0; i < visibleRef.current.length; i++) {
+      const c = visibleRef.current[i];
+      if (c.id === id) continue;
+      const l = cardLayouts.current.get(`canvas:${c.id}`);
+      if (l && x >= l.x && x <= l.x + l.width && y >= l.y && y <= l.y + l.height) {
+        idx = i;
+        break;
+      }
+    }
+    dropIntent.current.folderId = null;
+    dropIntent.current.index = idx;
+    setHoverFolderId(null);
+    setHoverIndex(idx);
+  }, []);
 
-  if (loading) {
-    return (
-      <View style={[styles.root, styles.center]}>
-        <ActivityIndicator color={theme.accent} size="large" />
-      </View>
-    );
-  }
+  const resolveDragEnd = useCallback((kind: 'canvas' | 'folder', id: string) => {
+    const intent = dropIntent.current;
+    dropIntent.current = { folderId: null, index: null, active: false };
+    setDrag(null);
+    setHoverFolderId(null);
+    setHoverIndex(null);
+    if (!intent.active) return;
+
+    if (kind === 'canvas') {
+      if (intent.folderId) {
+        moveCanvas(id, intent.folderId);
+        return;
+      }
+      const idx = intent.index;
+      if (idx === null) return;
+      const ids = visibleRef.current.map(c => c.id);
+      const from = ids.indexOf(id);
+      if (from === -1) return;
+      ids.splice(from, 1);
+      const insertAt = Math.max(0, Math.min(ids.length, idx > from ? idx - 1 : idx));
+      ids.splice(insertAt, 0, id);
+      setSortMode('manual');
+      reorderCanvases(ids);
+      return;
+    }
+
+    // Folder reorder
+    const idx = intent.index;
+    if (idx === null) return;
+    const ids = rootFoldersRef.current.map(f => f.id);
+    const from = ids.indexOf(id);
+    if (from === -1) return;
+    ids.splice(from, 1);
+    const insertAt = Math.max(0, Math.min(ids.length, idx > from ? idx - 1 : idx));
+    ids.splice(insertAt, 0, id);
+    reorderFolders(ids);
+  }, [moveCanvas, reorderCanvases, reorderFolders]);
+
+  handleDragEndRef.current = resolveDragEnd;
+
+  const makeCanvasCardProps = useCallback((item: CanvasMeta) => ({
+    item,
+    onTap: () => handleOpenCanvas(item.id),
+    onLongPress: () => handleContextMenu('canvas', item.id),
+    onDragStart: () => setDrag({
+      kind: 'canvas' as const, id: item.id, name: item.name, thumb: item.thumbnail, x: 0, y: 0, active: false,
+    }),
+    onDragMove: (x: number, y: number) => {
+      setDrag(prev => prev && prev.id === item.id ? { ...prev, x, y, active: true } : prev);
+      resolveDragMove('canvas', item.id, x, y);
+    },
+    onDragEnd: () => resolveDragEnd('canvas', item.id),
+    onOpen: () => handleOpenCanvas(item.id),
+    onMenu: () => handleContextMenu('canvas', item.id),
+    onRenameSubmit: handleRenameSubmit,
+    onRenameChange: (n: string) => setRenaming(r => r && r.type === 'canvas' && r.id === item.id ? { ...r, name: n } : r),
+  }), [handleOpenCanvas, handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd]);
+
+  const makeFolderCardProps = useCallback((item: Folder, previewThumbs: CanvasMeta[], count: number) => ({
+    item,
+    previewThumbs,
+    count,
+    onTap: () => setActiveFolderId(item.id),
+    onLongPress: () => handleContextMenu('folder', item.id),
+    onDragStart: () => setDrag({ kind: 'folder' as const, id: item.id, name: item.name, x: 0, y: 0, active: false }),
+    onDragMove: (x: number, y: number) => {
+      setDrag(prev => prev && prev.id === item.id ? { ...prev, x, y, active: true } : prev);
+      resolveDragMove('folder', item.id, x, y);
+    },
+    onDragEnd: () => resolveDragEnd('folder', item.id),
+  }), [handleContextMenu, resolveDragMove, resolveDragEnd]);
+
+  // ─── Thumbnail backfill ───────────────────────────────────────────
+  // Canvases drawn before previews existed (or never re-opened since) get
+  // their raster thumbnail generated here, one at a time, off-screen.
+  const [thumbTargetId, setThumbTargetId] = useState<string | null>(null);
+  const failedThumbs = useRef(new Set<string>());
+  useEffect(() => {
+    if (thumbTargetId) return;
+    const next = canvases.find(c =>
+      (!c.thumbnail || (c.thumbAt ?? 0) < c.updatedAt) && !failedThumbs.current.has(c.id));
+    if (next) setThumbTargetId(next.id);
+  }, [canvases, thumbTargetId]);
+
+  useEffect(() => {
+    if (!thumbTargetId) return;
+    let cancelled = false;
+    (async () => {
+      const data = await loadCanvasData(thumbTargetId);
+      if (cancelled) return;
+      if (!data) {
+        failedThumbs.current.add(thumbTargetId);
+        setThumbTargetId(null);
+        return;
+      }
+      const uri = await renderThumbnail(data.layers, data.meta.width, data.meta.height);
+      if (cancelled) return;
+      if (uri) await setCanvasThumbnail(thumbTargetId, uri);
+      else failedThumbs.current.add(thumbTargetId);
+      setThumbTargetId(null);
+    })();
+    return () => { cancelled = true; };
+  }, [thumbTargetId, loadCanvasData, setCanvasThumbnail]);
 
   const contextItem = contextMenu
     ? (contextMenu.type === 'canvas'
@@ -259,7 +701,44 @@ export default function VaultScreen() {
     : null;
 
   const { w: previewW, h: previewH } = showNewCanvas ? getCanvasDims() : { w: 1, h: 1 };
-  const aspectLabel = showNewCanvas ? `${previewW} × ${previewH} px` : '';
+
+  const renderCanvasItem = useCallback(({ item }: { item: CanvasMeta }) => (
+    <CanvasCard
+      {...makeCanvasCardProps(item)}
+      thumbH={thumbHFor(item)}
+      cellWidth={colW + GRID_GAP}
+      styles={styles}
+      theme={theme}
+      isDragging={drag?.kind === 'canvas' && drag.id === item.id && drag.active}
+      isHovered={!!(drag?.active && hoverIndex !== null && visibleCanvases[hoverIndex]?.id === item.id)}
+      renamingName={renaming?.type === 'canvas' && renaming.id === item.id ? renaming.name : null}
+      registerLayout={(l) => cardLayouts.current.set(`canvas:${item.id}`, l)}
+    />
+  ), [makeCanvasCardProps, thumbHFor, colW, styles, theme, drag, hoverIndex, visibleCanvases, renaming]);
+
+  const renderFolderItem = useCallback(({ item }: { item: Folder }) => {
+    const contained = canvases
+      .filter(c => c.folderId === item.id)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return (
+      <FolderCard
+        {...makeFolderCardProps(item, contained.slice(0, 4), contained.length)}
+        isActive={activeFolderId === item.id}
+        isDropTarget={!!(drag?.active && drag.kind === 'canvas' && hoverFolderId === item.id)}
+        styles={styles}
+        theme={theme}
+        registerLayout={(l) => cardLayouts.current.set(`folder:${item.id}`, l)}
+      />
+    );
+  }, [canvases, makeFolderCardProps, activeFolderId, drag, hoverFolderId, styles, theme]);
+
+  if (loading) {
+    return (
+      <View style={[styles.root, styles.center]}>
+        <ActivityIndicator color={theme.accent} size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -309,15 +788,24 @@ export default function VaultScreen() {
         </View>
       )}
 
-      {/* Sort control */}
+      {/* Sort + View controls */}
       {canvases.length > 1 && (
-        <Pressable
-          style={[styles.sortBtn, { backgroundColor: theme.surfaceHigh, borderColor: theme.surfaceBorder }]}
-          onPress={cycleSortMode}
-        >
-          <MaterialCommunityIcons name={activeSortMode.icon as any} size={14} color={theme.textSecondary} />
-          <Text style={styles.sortBtnText}>Trier : {activeSortMode.label}</Text>
-        </Pressable>
+        <View style={styles.controlsRow}>
+          <Pressable
+            style={[styles.sortBtn, { backgroundColor: theme.surfaceHigh, borderColor: theme.surfaceBorder }]}
+            onPress={cycleSortMode}
+          >
+            <MaterialCommunityIcons name={activeSortMode.icon as any} size={14} color={theme.textSecondary} />
+            <Text style={styles.sortBtnText}>Trier : {activeSortMode.label}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.sortBtn, { backgroundColor: theme.surfaceHigh, borderColor: theme.surfaceBorder }]}
+            onPress={cycleViewSize}
+          >
+            <MaterialCommunityIcons name={activeView.icon as any} size={14} color={theme.textSecondary} />
+            <Text style={styles.sortBtnText}>Affichage : {activeView.label}</Text>
+          </Pressable>
+        </View>
       )}
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -338,9 +826,11 @@ export default function VaultScreen() {
               <FlatList
                 data={searchResults}
                 keyExtractor={c => c.id}
-                renderItem={renderCanvas}
+                renderItem={renderCanvasItem}
+                numColumns={numColumns}
+                key={`search-${numColumns}`}
                 scrollEnabled={false}
-                contentContainerStyle={styles.canvasList}
+                contentContainerStyle={styles.canvasGrid}
               />
             )}
           </>
@@ -376,16 +866,16 @@ export default function VaultScreen() {
                 <FlatList
                   data={rootFolders}
                   keyExtractor={f => f.id}
-                  renderItem={renderFolder}
+                  renderItem={renderFolderItem}
                   horizontal
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.foldersRow}
-                  scrollEnabled={rootFolders.length > 3}
+                  scrollEnabled={rootFolders.length > 4}
                 />
               </>
             )}
 
-            {/* Canvas list */}
+            {/* Canvas grid */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>
                 {activeFolderId === 'root' ? 'Toutes les toiles' : folders.find(f => f.id === activeFolderId)?.name ?? 'Toiles'}
@@ -395,7 +885,7 @@ export default function VaultScreen() {
 
             {visibleCanvases.length === 0 ? (
               <View style={styles.emptyState}>
-                <MaterialCommunityIcons name="brush-outline" size={56} color={theme.textMuted} />
+                <MaterialCommunityIcons name="brush" size={56} color={theme.textMuted} />
                 <Text style={styles.emptyTitle}>Aucune toile</Text>
                 <Text style={styles.emptySubtitle}>Créez votre première toile pour commencer</Text>
               </View>
@@ -403,9 +893,11 @@ export default function VaultScreen() {
               <FlatList
                 data={visibleCanvases}
                 keyExtractor={c => c.id}
-                renderItem={renderCanvas}
+                renderItem={renderCanvasItem}
+                numColumns={numColumns}
+                key={`grid-${numColumns}`}
                 scrollEnabled={false}
-                contentContainerStyle={styles.canvasList}
+                contentContainerStyle={styles.canvasGrid}
               />
             )}
           </>
@@ -422,6 +914,26 @@ export default function VaultScreen() {
         <MaterialCommunityIcons name="plus" size={28} color="#0d0d0d" />
       </Pressable>
 
+      {/* Drag ghost */}
+      <Modal visible={!!drag?.active} transparent pointerEvents="none" animationType="fade">
+        <View style={styles.dragGhostLayer}>
+          <View style={[styles.dragGhost, { left: (drag?.x ?? 0) - 60, top: (drag?.y ?? 0) - 50 }]}>
+            {drag?.thumb ? (
+              <Image source={{ uri: drag.thumb }} style={styles.dragGhostThumb} />
+            ) : (
+              <View style={[styles.dragGhostThumb, styles.dragGhostPlaceholder]}>
+                <MaterialCommunityIcons
+                  name={drag?.kind === 'folder' ? 'folder' : 'brush'}
+                  size={30}
+                  color={theme.textMuted}
+                />
+              </View>
+            )}
+            <Text style={styles.dragGhostName} numberOfLines={1}>{drag?.name}</Text>
+          </View>
+        </View>
+      </Modal>
+
       {/* ─── New Canvas Modal ─── */}
       <Modal visible={showNewCanvas} transparent animationType="slide">
         <Pressable style={styles.modalOverlay} onPress={() => setShowNewCanvas(false)}>
@@ -431,7 +943,21 @@ export default function VaultScreen() {
 
             {dimStep === 'dims' ? (
               <>
-                <Text style={styles.dimLabel}>Format</Text>
+                <Pressable
+                  style={({ pressed }) => [styles.importBtn, { borderColor: theme.accent, backgroundColor: theme.activeGlow }, pressed && { opacity: 0.7 }]}
+                  onPress={handlePickImage}
+                >
+                  <MaterialCommunityIcons name="image-plus" size={20} color={theme.accent} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.importBtnTitle, { color: theme.accent }]}>Importer une image</Text>
+                    <Text style={[styles.importBtnSub, { color: theme.textMuted }]}>
+                      PNG (transparence), JPG… — la toile prend la taille de l'image
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons name="chevron-right" size={16} color={theme.textMuted} />
+                </Pressable>
+
+                <Text style={styles.dimLabel}>Ou partir d'un format vierge</Text>
                 <View style={styles.presetGrid}>
                   {DIM_PRESETS.map(p => {
                     const isActive = selectedPreset.label === p.label;
@@ -500,9 +1026,13 @@ export default function VaultScreen() {
               </>
             ) : (
               <>
-                <View style={[styles.dimPreview, { borderColor: theme.surfaceBorder, marginBottom: 12 }]}>
-                  <MaterialCommunityIcons name={selectedPreset.icon as any} size={14} color={theme.accent} />
-                  <Text style={[styles.dimPreviewText, { color: theme.accent }]}>{selectedPreset.label} — {previewW}×{previewH} px</Text>
+                <View style={[styles.dimPreview, { borderColor: theme.accent, marginBottom: 12 }]}>
+                  <MaterialCommunityIcons name={importedSrc ? 'image-outline' : selectedPreset.icon as any} size={14} color={theme.accent} />
+                  <Text style={[styles.dimPreviewText, { color: theme.accent }]}>
+                    {importedSrc
+                      ? `Image importée — ${importedDims ? `${importedDims.w}×${importedDims.h}` : ''} px`
+                      : `${selectedPreset.label} — ${previewW}×${previewH} px`}
+                  </Text>
                 </View>
                 <TextInput
                   style={styles.modalInput}
@@ -514,7 +1044,7 @@ export default function VaultScreen() {
                   onSubmitEditing={handleCreateCanvas}
                 />
                 <View style={styles.modalActions}>
-                  <Pressable style={styles.cancelBtn} onPress={() => setDimStep('dims')}>
+                  <Pressable style={styles.cancelBtn} onPress={() => { setImportedSrc(null); setImportedDims(null); setDimStep('dims'); }}>
                     <MaterialCommunityIcons name="chevron-left" size={16} color={theme.textSecondary} />
                     <Text style={[styles.btnText, { color: theme.textSecondary }]}>Retour</Text>
                   </Pressable>
@@ -617,6 +1147,24 @@ export default function VaultScreen() {
                   <Text style={styles.contextItemText}>Renommer</Text>
                 </Pressable>
                 <View style={styles.contextDivider} />
+                <Text style={styles.contextSectionLabel}>Aperçu du dossier</Text>
+                {(['recent', 'mosaic', 'classic'] as FolderPreviewMode[]).map(mode => {
+                  const current = (contextItem as Folder | undefined)?.previewMode ?? 'recent';
+                  return (
+                    <Pressable key={mode} style={styles.contextItem} onPress={() => {
+                      setFolderPreview(contextMenu.id, mode);
+                      setContextMenu(null);
+                    }}>
+                      <MaterialCommunityIcons
+                        name={current === mode ? 'check-circle' : 'circle-outline'}
+                        size={16}
+                        color={current === mode ? theme.accent : theme.textMuted}
+                      />
+                      <Text style={styles.contextItemText}>{FOLDER_PREVIEW_LABELS[mode]}</Text>
+                    </Pressable>
+                  );
+                })}
+                <View style={styles.contextDivider} />
                 <Pressable style={styles.contextItem} onPress={() => {
                   const f = folders.find(x => x.id === contextMenu.id);
                   handleDelete('folder', contextMenu.id, f?.name ?? 'ce dossier');
@@ -679,9 +1227,10 @@ function makeStyles(theme: any) {
       borderRadius: 12, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder,
     },
     searchInput: { flex: 1, fontSize: 14, color: theme.textPrimary, height: '100%' },
+    controlsRow: { flexDirection: 'row', gap: 8, marginHorizontal: 16, marginTop: 10 },
     sortBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-      marginHorizontal: 16, marginTop: 10, paddingHorizontal: 10, paddingVertical: 6,
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: 10, paddingVertical: 6,
       borderRadius: 20, borderWidth: 1,
     },
     sortBtnText: { fontSize: 12, fontWeight: '600', color: theme.textSecondary },
@@ -693,25 +1242,68 @@ function makeStyles(theme: any) {
     sectionTitle: { fontSize: 13, fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
     sectionCount: { fontSize: 12, color: theme.textMuted, backgroundColor: theme.surfaceHigh, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
     foldersRow: { paddingHorizontal: 16, paddingBottom: 8, gap: 12 },
-    folderCard: { width: 100, padding: 12, borderRadius: 14, backgroundColor: theme.cardBg, borderWidth: 1, borderColor: theme.surfaceBorder, alignItems: 'center', gap: 6 },
-    folderName: { fontSize: 12, color: theme.textPrimary, fontWeight: '600', textAlign: 'center' },
+    // Folder cards — per-folder preview (recent / mosaic / classic)
+    folderCard: {
+      width: 150, height: 150, borderRadius: 14, backgroundColor: theme.cardBg,
+      borderWidth: 1, borderColor: theme.surfaceBorder, alignItems: 'center', justifyContent: 'center', gap: 6,
+      overflow: 'hidden',
+    },
+    folderPreviewImg: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
+    folderMosaic: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, flexDirection: 'row', flexWrap: 'wrap' },
+    folderMosaicCell: { width: '50%', height: '50%' },
+    folderMosaicEmpty: { backgroundColor: 'rgba(0,0,0,0.08)' },
+    folderScrim: {
+      position: 'absolute', left: 0, right: 0, bottom: 20,
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 4,
+    },
+    folderNameOnImage: { fontSize: 12, color: '#ffffff', fontWeight: '600', flex: 1 },
+    folderCountOverlay: {
+      position: 'absolute', right: 6, top: 6, bottom: 'auto',
+      backgroundColor: 'rgba(0,0,0,0.55)', color: '#ffffff',
+      paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10, overflow: 'hidden',
+    },
+    folderName: { fontSize: 12, color: theme.textPrimary, fontWeight: '600', textAlign: 'center', paddingHorizontal: 6 },
     folderCount: { fontSize: 10, color: theme.textMuted },
-    canvasList: { paddingHorizontal: 16, gap: 10, paddingBottom: 16 },
-    canvasCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: theme.cardBg, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: theme.surfaceBorder },
-    canvasThumbnail: { width: 52, height: 52, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.surfaceBorder },
+    // Canvas grid cards — a real framed preview with the title below
+    canvasGrid: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+    canvasCell: { paddingHorizontal: GRID_GAP / 2, marginBottom: GRID_GAP },
+    canvasCard: {
+      backgroundColor: theme.cardBg, borderRadius: 14, padding: 8,
+      borderWidth: 1, borderColor: theme.surfaceBorder,
+    },
+    canvasFrame: {
+      borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: theme.surfaceBorder,
+      backgroundColor: theme.surfaceHigh, marginBottom: 8,
+    },
+    canvasThumbImg: { width: '100%', height: '100%' },
+    canvasThumbPlaceholder: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
     thumbInfo: { alignItems: 'center', gap: 2 },
     thumbStrokeCount: { fontSize: 13, color: '#555', fontWeight: '700' },
     thumbDims: { fontSize: 8, color: '#888' },
-    canvasInfo: { flex: 1 },
-    canvasName: { fontSize: 15, color: theme.textPrimary, fontWeight: '600', marginBottom: 2 },
-    canvasDate: { fontSize: 11, color: theme.textMuted },
-    canvasDims: { fontSize: 10, color: theme.textMuted, marginTop: 1 },
-    moreBtn: { padding: 8 },
-    inlineInput: { fontSize: 15, color: theme.textPrimary, fontWeight: '600', borderBottomWidth: 1, borderBottomColor: theme.accent, paddingVertical: 0 },
+    cardMoreBtn: {
+      position: 'absolute', top: 4, right: 4,
+      width: 24, height: 24, borderRadius: 12,
+      backgroundColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center',
+    },
+    canvasName: { fontSize: 13, color: theme.textPrimary, fontWeight: '600', marginBottom: 2 },
+    canvasMetaLine: { fontSize: 10, color: theme.textMuted },
+    inlineInput: { fontSize: 13, color: theme.textPrimary, fontWeight: '600', borderBottomWidth: 1, borderBottomColor: theme.accent, paddingVertical: 0 },
     emptyState: { alignItems: 'center', paddingTop: 60, paddingBottom: 40, gap: 10 },
     emptyTitle: { fontSize: 18, color: theme.textSecondary, fontWeight: '600' },
     emptySubtitle: { fontSize: 14, color: theme.textMuted, textAlign: 'center' },
     fab: { position: 'absolute', right: 20, width: 60, height: 60, borderRadius: 30, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center', shadowColor: theme.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 12, elevation: 10 },
+    // Drag ghost
+    dragGhostLayer: { flex: 1 },
+    dragGhost: {
+      position: 'absolute', width: 120, alignItems: 'center',
+      backgroundColor: theme.surface, borderRadius: 12, padding: 6,
+      borderWidth: 2, borderColor: theme.accent,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 12, elevation: 12,
+    },
+    dragGhostThumb: { width: 108, height: 80, borderRadius: 8, backgroundColor: theme.surfaceHigh },
+    dragGhostPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+    dragGhostName: { fontSize: 10, color: theme.textPrimary, fontWeight: '600', marginTop: 4, maxWidth: 108 },
     // Modal
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
     modalSheet: { backgroundColor: theme.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 12, borderTopWidth: 1, borderColor: theme.surfaceBorder },
@@ -723,6 +1315,22 @@ function makeStyles(theme: any) {
     createBtn: { flex: 1, height: 48, borderRadius: 12, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
     btnText: { fontSize: 15, fontWeight: '600' },
     // Dimension picker
+    importBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      padding: 12,
+      borderRadius: 12,
+      borderWidth: 2,
+    },
+    importBtnTitle: {
+      fontSize: FontSize.sm,
+      fontWeight: '700',
+    },
+    importBtnSub: {
+      fontSize: FontSize.xs,
+      marginTop: 1,
+    },
     dimLabel: { fontSize: 12, color: theme.textMuted, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
     presetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     presetBtn: { width: '47%', flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder },
@@ -740,8 +1348,9 @@ function makeStyles(theme: any) {
     colorDot: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: 'transparent' },
     colorDotActive: { borderColor: theme.textPrimary, transform: [{ scale: 1.15 }] },
     // Context menu
-    contextMenu: { position: 'absolute', top: '30%', left: 32, right: 32, backgroundColor: theme.surface, borderRadius: 18, padding: 8, borderWidth: 1, borderColor: theme.surfaceBorder, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 24, elevation: 20 },
+    contextMenu: { position: 'absolute', top: '12%', left: 32, right: 32, backgroundColor: theme.surface, borderRadius: 18, padding: 8, borderWidth: 1, borderColor: theme.surfaceBorder, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 24, elevation: 20 },
     contextTitle: { fontSize: 12, color: theme.textMuted, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 16, paddingVertical: 8 },
+    contextSectionLabel: { fontSize: 11, color: theme.textMuted, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 16, paddingTop: 6, paddingBottom: 2 },
     contextItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10 },
     contextItemText: { fontSize: 15, color: theme.textPrimary, fontWeight: '500' },
     contextDivider: { height: 1, backgroundColor: theme.surfaceBorder, marginVertical: 4, marginHorizontal: 8 },

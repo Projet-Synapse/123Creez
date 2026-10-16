@@ -1,16 +1,24 @@
 // Powered by OnSpace.AI
 import React, {
-  createContext, useState, useCallback, useEffect, ReactNode,
+  createContext, useState, useCallback, useEffect, useRef, ReactNode,
 } from 'react';
 import {
-  CanvasMeta, Folder, CanvasData,
+  CanvasMeta, Folder, CanvasData, FolderPreviewMode,
   getCanvasMetas, getFolders,
   saveCanvas, deleteCanvas, renameCanvas, moveCanvasToFolder,
-  saveFolder, deleteFolder,
+  saveFolder, deleteFolder, setCanvasThumbnail as persistThumbnail,
+  setCanvasOrder as persistCanvasOrder, setFoldersOrder as persistFoldersOrder,
+  setFolderPreviewMode as persistFolderPreviewMode,
   loadCanvas, createDefaultCanvas, generateId,
   computeThumbnailColor, computeStrokeCount,
 } from '@/services/vaultService';
-import { Layer } from '@/contexts/CanvasContext';
+import { Layer, LayerGroup } from '@/contexts/CanvasContext';
+import {
+  vaultFolderAvailable, getVaultFolder, exportCanvasToFolder,
+  readImageSize, buildImageLayer,
+} from '@/services/vaultFolderService';
+import { desktop } from '@/services/platform';
+import { recordTombstone, autoPush } from '@/services/supabaseService';
 
 interface VaultContextType {
   canvases: CanvasMeta[];
@@ -18,6 +26,8 @@ interface VaultContextType {
   loading: boolean;
 
   createCanvas: (name: string, folderId?: string | null, width?: number, height?: number) => Promise<string>;
+  /** Crée une toile depuis une image (import du dossier vault). */
+  createImageCanvas: (name: string, src: string) => Promise<string | null>;
   removeCanvas: (id: string) => Promise<void>;
   renameCanvas: (id: string, name: string) => Promise<void>;
   moveCanvas: (id: string, folderId: string | null) => Promise<void>;
@@ -27,7 +37,14 @@ interface VaultContextType {
   renameFolder: (id: string, name: string) => Promise<void>;
   removeFolder: (id: string) => Promise<void>;
 
-  persistCanvas: (id: string, layers: Layer[], activeLayerId: string) => Promise<void>;
+  /** Drag & drop: persists a manual ordering (canvases / folders). */
+  reorderCanvases: (orderedIds: string[]) => Promise<void>;
+  reorderFolders: (orderedIds: string[]) => Promise<void>;
+  setFolderPreview: (id: string, mode: FolderPreviewMode) => Promise<void>;
+  /** Stores a generated raster preview for a canvas. */
+  setCanvasThumbnail: (id: string, thumbnail: string) => Promise<void>;
+
+  persistCanvas: (id: string, layers: Layer[], activeLayerId: string, groups?: LayerGroup[]) => Promise<void>;
   loadCanvasData: (id: string) => Promise<CanvasData | null>;
   reload: () => Promise<void>;
 }
@@ -49,6 +66,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => { reload(); }, [reload]);
 
+  // Push Supabase automatique, débattu (une rafale de sauvegardes = un push).
+  const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const schedulePush = useCallback(() => {
+    if (pushTimer.current) clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(() => { autoPush(); }, 4000);
+  }, []);
+
   const createCanvas = useCallback(async (
     name: string,
     folderId: string | null = null,
@@ -63,7 +87,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   const removeCanvas = useCallback(async (id: string) => {
     await deleteCanvas(id);
+    await recordTombstone('canvas', id);
     setCanvases(prev => prev.filter(c => c.id !== id));
+    schedulePush();
   }, []);
 
   const renameCanvasFn = useCallback(async (id: string, name: string) => {
@@ -72,8 +98,20 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const moveCanvas = useCallback(async (id: string, folderId: string | null) => {
+    const metas = await getCanvasMetas();
+    // Append at the end of the target folder's manual order.
+    const inFolder = metas
+      .filter(m => m.folderId === folderId && m.id !== id)
+      .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+    const orderedIds = [...inFolder.map(m => m.id), id];
     await moveCanvasToFolder(id, folderId);
-    setCanvases(prev => prev.map(c => c.id === id ? { ...c, folderId, updatedAt: Date.now() } : c));
+    await persistCanvasOrder(orderedIds);
+    const rank = new Map(orderedIds.map((cid, idx) => [cid, idx]));
+    setCanvases(prev => prev.map(c => {
+      if (c.id === id) return { ...c, folderId, updatedAt: Date.now(), order: rank.get(id) };
+      const r = rank.get(c.id);
+      return r !== undefined ? { ...c, order: r } : c;
+    }));
   }, []);
 
   const duplicateCanvas = useCallback(async (id: string): Promise<string> => {
@@ -120,13 +158,42 @@ export function VaultProvider({ children }: { children: ReactNode }) {
 
   const removeFolder = useCallback(async (id: string) => {
     await deleteFolder(id);
+    await recordTombstone('folder', id);
     const affected = canvases.filter(c => c.folderId === id);
     for (const c of affected) await moveCanvasToFolder(c.id, null);
     setFolders(prev => prev.filter(f => f.id !== id));
     setCanvases(prev => prev.map(c => c.folderId === id ? { ...c, folderId: null } : c));
   }, [canvases]);
 
-  const persistCanvas = useCallback(async (id: string, layers: Layer[], activeLayerId: string) => {
+  const reorderCanvases = useCallback(async (orderedIds: string[]) => {
+    await persistCanvasOrder(orderedIds);
+    const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
+    setCanvases(prev => prev.map(c => {
+      const r = rank.get(c.id);
+      return r !== undefined ? { ...c, order: r } : c;
+    }));
+  }, []);
+
+  const reorderFolders = useCallback(async (orderedIds: string[]) => {
+    await persistFoldersOrder(orderedIds);
+    const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
+    setFolders(prev => prev.map(f => {
+      const r = rank.get(f.id);
+      return r !== undefined ? { ...f, order: r } : f;
+    }));
+  }, []);
+
+  const setFolderPreview = useCallback(async (id: string, mode: FolderPreviewMode) => {
+    await persistFolderPreviewMode(id, mode);
+    setFolders(prev => prev.map(f => f.id === id ? { ...f, previewMode: mode } : f));
+  }, []);
+
+  const setCanvasThumbnail = useCallback(async (id: string, thumbnail: string) => {
+    await persistThumbnail(id, thumbnail);
+    setCanvases(prev => prev.map(c => c.id === id ? { ...c, thumbnail, thumbAt: Date.now() } : c));
+  }, []);
+
+  const persistCanvas = useCallback(async (id: string, layers: Layer[], activeLayerId: string, groups?: LayerGroup[]) => {
     const metas = await getCanvasMetas();
     const meta = metas.find(m => m.id === id);
     if (!meta) return;
@@ -136,19 +203,84 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       thumbnailColor: computeThumbnailColor(layers),
       strokeCount: computeStrokeCount(layers),
     };
-    await saveCanvas({ meta: updatedMeta, layers, activeLayerId });
+    await saveCanvas({ meta: updatedMeta, layers, activeLayerId, groups });
     setCanvases(prev => prev.map(c => c.id === id ? updatedMeta : c));
+    // Miroir explorateur : PNG pleine résolution dans le dossier lié.
+    if (vaultFolderAvailable()) {
+      exportCanvasToFolder(updatedMeta.name, id, layers, updatedMeta.width, updatedMeta.height)
+        .catch(() => { });
+    }
+    schedulePush();
   }, []);
 
   const loadCanvasData = useCallback(async (id: string): Promise<CanvasData | null> => {
     return loadCanvas(id);
   }, []);
 
+  /** Import dossier : image → nouvelle toile (calque image ajusté). */
+  const createImageCanvas = useCallback(async (name: string, src: string): Promise<string | null> => {
+    try {
+      const { width, height } = await readImageSize(src);
+      // Plafond raisonnable pour les très grandes photos.
+      const cap = 4096;
+      const scale = Math.min(1, cap / Math.max(width, height));
+      const w = Math.max(100, Math.round(width * scale));
+      const h = Math.max(100, Math.round(height * scale));
+      const id = generateId('canvas');
+      const layerId = `layer-1-${id}`;
+      const now = Date.now();
+      const data: CanvasData = {
+        meta: {
+          id, name: name.replace(/\.[a-zA-Z0-9]+$/, ''), folderId: null,
+          createdAt: now, updatedAt: now, width: w, height: h,
+          thumbnailColor: '#ffffff', strokeCount: 0,
+        },
+        layers: [{
+          id: layerId, name: 'Image', visible: true, opacity: 1, strokes: [],
+          images: [buildImageLayer(`img-${id}`, src, width, height, w, h)],
+        }],
+        activeLayerId: layerId,
+        groups: [],
+      };
+      await saveCanvas(data);
+      await reload();
+      return id;
+    } catch {
+      return null;
+    }
+  }, [reload]);
+
+  // ── Dossier vault : surveillance des images déposées ────────────────
+  useEffect(() => {
+    if (!vaultFolderAvailable()) return;
+    let busy = false;
+    const importPending = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const images = await desktop()!.vaultFolder!.listImages();
+        for (const file of images) {
+          if (/--canvas-\d+-\d+\.png$/i.test(file.name)) continue; // nos propres exports
+          const src = await desktop()!.vaultFolder!.readImage(file.path);
+          if (!src) continue;
+          const id = await createImageCanvas(file.name, src);
+          if (id) await desktop()!.vaultFolder!.deleteImage(file.path);
+        }
+      } finally {
+        busy = false;
+      }
+    };
+    const unsub = desktop()!.vaultFolder!.onEvent(() => { importPending(); });
+    getVaultFolder().then(folder => { if (folder) importPending(); });
+    return unsub;
+  }, [createImageCanvas]);
+
   return (
     <VaultContext.Provider value={{
       canvases, folders, loading,
       createCanvas, removeCanvas, renameCanvas: renameCanvasFn, moveCanvas, duplicateCanvas,
-      createFolder, renameFolder, removeFolder,
+      createFolder, renameFolder, removeFolder, createImageCanvas,
+      reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,
       persistCanvas, loadCanvasData, reload,
     }}>
       {children}

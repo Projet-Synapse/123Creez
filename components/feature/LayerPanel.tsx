@@ -1,6 +1,6 @@
 // Powered by OnSpace.AI
 import React from 'react';
-import { View, StyleSheet, Text, Pressable, ScrollView } from 'react-native';
+import { View, StyleSheet, Text, Pressable, ScrollView, TextInput } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useCanvas } from '@/hooks/useCanvas';
@@ -8,101 +8,210 @@ import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 const LayerPanel: React.FC = () => {
   const {
-    layers, activeLayerId, setActiveLayerId,
-    addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer
+    layers, layerGroups, activeLayerId, setActiveLayerId,
+    addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer,
+    addLayerGroup, renameLayerGroup, removeLayerGroup, toggleGroupCollapsed,
+    setLayerGroup, toggleGroupVisibility,
   } = useCanvas();
+  const [renamingGroup, setRenamingGroup] = React.useState<string | null>(null);
+  const [groupName, setGroupName] = React.useState('');
+
+  const renderLayer = (layer: (typeof layers)[number]) => {
+    const isActive = layer.id === activeLayerId;
+    return (
+      <View key={layer.id} style={[styles.layerItem, isActive && styles.layerItemActive]}>
+        <Pressable
+          style={styles.layerMain}
+          onPress={() => setActiveLayerId(layer.id)}
+        >
+          <View style={styles.miniPreview}>
+            <MaterialCommunityIcons
+              name="layers"
+              size={16}
+              color={isActive ? Colors.accent : Colors.textSecondary}
+            />
+          </View>
+
+          <View style={styles.layerInfo}>
+            <Text style={[styles.layerName, isActive && styles.layerNameActive]}>
+              {layer.name}
+            </Text>
+            <Text style={styles.layerMeta}>
+              {layer.strokes.length} trait{layer.strokes.length !== 1 ? 's' : ''}
+            </Text>
+          </View>
+        </Pressable>
+
+        <View style={styles.layerControls}>
+          <Pressable
+            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+            onPress={() => toggleLayerVisibility(layer.id)}
+            hitSlop={6}
+          >
+            <MaterialCommunityIcons
+              name={layer.visible ? 'eye' : 'eye-off'}
+              size={16}
+              color={layer.visible ? Colors.textSecondary : Colors.textMuted}
+            />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+            onPress={() => clearLayer(layer.id)}
+            hitSlop={6}
+          >
+            <MaterialCommunityIcons name="eraser" size={16} color={Colors.textMuted} />
+          </Pressable>
+          {layers.length > 1 && (
+            <Pressable
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+              onPress={() => removeLayer(layer.id)}
+              hitSlop={6}
+            >
+              <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
+            </Pressable>
+          )}
+        </View>
+
+        {isActive && (
+          <>
+            <View style={styles.opacityRow}>
+              <Text style={styles.opacityLabel}>Opacité</Text>
+              <Text style={styles.opacityValue}>{Math.round(layer.opacity * 100)}%</Text>
+              <Slider
+                style={styles.opacitySlider}
+                minimumValue={0.1}
+                maximumValue={1}
+                value={layer.opacity}
+                onValueChange={(v) => setLayerOpacity(layer.id, v)}
+                minimumTrackTintColor={Colors.accent}
+                maximumTrackTintColor={Colors.surfaceBorder}
+                thumbTintColor={Colors.accent}
+              />
+            </View>
+            {layerGroups.length > 0 && (
+              <View style={styles.groupAssignRow}>
+                <Text style={styles.opacityLabel}>Groupe</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.groupChips}>
+                  <Pressable
+                    style={[styles.groupChip, !layer.groupId && styles.groupChipActive]}
+                    onPress={() => setLayerGroup(layer.id, null)}
+                  >
+                    <Text style={[styles.groupChipText, !layer.groupId && styles.groupChipTextActive]}>Aucun</Text>
+                  </Pressable>
+                  {layerGroups.map(g => (
+                    <Pressable
+                      key={g.id}
+                      style={[styles.groupChip, layer.groupId === g.id && styles.groupChipActive]}
+                      onPress={() => setLayerGroup(layer.id, g.id)}
+                    >
+                      <Text style={[styles.groupChipText, layer.groupId === g.id && styles.groupChipTextActive]} numberOfLines={1}>
+                        {g.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </>
+        )}
+      </View>
+    );
+  };
+
+  // Ordre d'affichage : groupes (ordre de création), puis calques sans
+  // groupe. À l'intérieur d'une section, l'ordre d'empilement est conservé
+  // (haut de liste = premier plan).
+  const groupedIds = new Set(layerGroups.map(g => g.id));
+  const ungrouped = [...layers].reverse().filter(l => !l.groupId || !groupedIds.has(l.groupId));
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Calques</Text>
-        <Pressable
-          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
-          onPress={addLayer}
-        >
-          <MaterialCommunityIcons name="plus" size={18} color={Colors.accent} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+            onPress={() => {
+              const g = addLayerGroup();
+              setRenamingGroup(g.id);
+              setGroupName(g.name);
+            }}
+          >
+            <MaterialCommunityIcons name="folder-outline" size={18} color={Colors.accent} />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+            onPress={addLayer}
+          >
+            <MaterialCommunityIcons name="plus" size={18} color={Colors.accent} />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {[...layers].reverse().map(layer => {
-          const isActive = layer.id === activeLayerId;
+        {layerGroups.map(group => {
+          const inGroup = [...layers].reverse().filter(l => l.groupId === group.id);
           return (
-            <View key={layer.id} style={[styles.layerItem, isActive && styles.layerItemActive]}>
-              <Pressable
-                style={styles.layerMain}
-                onPress={() => setActiveLayerId(layer.id)}
-              >
-                {/* Mini preview */}
-                <View style={styles.miniPreview}>
-                  <MaterialCommunityIcons
-                    name="layers"
-                    size={16}
-                    color={isActive ? Colors.accent : Colors.textSecondary}
-                  />
-                </View>
-
-                <View style={styles.layerInfo}>
-                  <Text style={[styles.layerName, isActive && styles.layerNameActive]}>
-                    {layer.name}
-                  </Text>
-                  <Text style={styles.layerMeta}>
-                    {layer.strokes.length} trait{layer.strokes.length !== 1 ? 's' : ''}
-                  </Text>
-                </View>
-              </Pressable>
-
-              {/* Controls */}
-              <View style={styles.layerControls}>
+            <View key={group.id} style={styles.groupBlock}>
+              <View style={styles.groupHeader}>
                 <Pressable
-                  style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-                  onPress={() => toggleLayerVisibility(layer.id)}
-                  hitSlop={6}
+                  style={styles.groupTitleRow}
+                  onPress={() => toggleGroupCollapsed(group.id)}
                 >
                   <MaterialCommunityIcons
-                    name={layer.visible ? 'eye' : 'eye-off'}
+                    name={group.collapsed ? 'chevron-right' : 'chevron-down'}
                     size={16}
-                    color={layer.visible ? Colors.textSecondary : Colors.textMuted}
+                    color={Colors.textSecondary}
                   />
+                  {renamingGroup === group.id ? (
+                    <TextInput
+                      style={styles.groupRenameInput}
+                      value={groupName}
+                      onChangeText={setGroupName}
+                      onSubmitEditing={() => { renameLayerGroup(group.id, groupName.trim() || group.name); setRenamingGroup(null); }}
+                      onBlur={() => { renameLayerGroup(group.id, groupName.trim() || group.name); setRenamingGroup(null); }}
+                      autoFocus
+                    />
+                  ) : (
+                    <Text style={styles.groupName} numberOfLines={1}>{group.name}</Text>
+                  )}
+                  <Text style={styles.groupCount}>{inGroup.length}</Text>
                 </Pressable>
-                <Pressable
-                  style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-                  onPress={() => clearLayer(layer.id)}
-                  hitSlop={6}
-                >
-                  <MaterialCommunityIcons name="eraser" size={16} color={Colors.textMuted} />
-                </Pressable>
-                {layers.length > 1 && (
+                <View style={styles.groupActions}>
                   <Pressable
                     style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-                    onPress={() => removeLayer(layer.id)}
+                    onPress={() => toggleGroupVisibility(group.id)}
                     hitSlop={6}
                   >
-                    <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
+                    <MaterialCommunityIcons name="eye-outline" size={16} color={Colors.textSecondary} />
                   </Pressable>
-                )}
-              </View>
-
-              {/* Opacity slider */}
-              {isActive && (
-                <View style={styles.opacityRow}>
-                  <Text style={styles.opacityLabel}>Opacité</Text>
-                  <Text style={styles.opacityValue}>{Math.round(layer.opacity * 100)}%</Text>
-                  <Slider
-                    style={styles.opacitySlider}
-                    minimumValue={0.1}
-                    maximumValue={1}
-                    value={layer.opacity}
-                    onValueChange={(v) => setLayerOpacity(layer.id, v)}
-                    minimumTrackTintColor={Colors.accent}
-                    maximumTrackTintColor={Colors.surfaceBorder}
-                    thumbTintColor={Colors.accent}
-                  />
+                  <Pressable
+                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+                    onPress={() => { setRenamingGroup(group.id); setGroupName(group.name); }}
+                    hitSlop={6}
+                  >
+                    <MaterialCommunityIcons name="pencil-outline" size={15} color={Colors.textMuted} />
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+                    onPress={() => removeLayerGroup(group.id)}
+                    hitSlop={6}
+                  >
+                    <MaterialCommunityIcons name="close" size={15} color={Colors.danger} />
+                  </Pressable>
                 </View>
-              )}
+              </View>
+              {!group.collapsed && inGroup.map(renderLayer)}
             </View>
           );
         })}
+
+        {ungrouped.length > 0 && (
+          <>
+            {layerGroups.length > 0 && <Text style={styles.ungroupedLabel}>Sans groupe</Text>}
+            {ungrouped.map(renderLayer)}
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -137,6 +246,93 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  groupBlock: {
+    marginBottom: Spacing.xs,
+  },
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 4,
+  },
+  groupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
+  },
+  groupName: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  groupRenameInput: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.accent,
+    paddingVertical: 0,
+    minWidth: 80,
+    flex: 1,
+  },
+  groupCount: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    backgroundColor: Colors.surfaceHigh,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  groupActions: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  ungroupedLabel: {
+    fontSize: FontSize.xs,
+    color: Colors.textMuted,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 4,
+  },
+  groupAssignRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.sm,
+    paddingBottom: Spacing.xs,
+    gap: Spacing.xs,
+  },
+  groupChips: {
+    flex: 1,
+  },
+  groupChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: Colors.surfaceHigh,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  groupChipActive: {
+    borderColor: Colors.accent,
+    backgroundColor: 'rgba(78,205,196,0.1)',
+  },
+  groupChipText: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+  },
+  groupChipTextActive: {
+    color: Colors.accent,
+    fontWeight: '600',
   },
   layerItem: {
     backgroundColor: Colors.surfaceHigh,

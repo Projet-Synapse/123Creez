@@ -53,8 +53,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Installer le SDK Android
-        uses: android-actions/setup-android@v3
+      # Le runner GitHub a déjà le SDK Android préinstallé (ANDROID_HOME) ;
+      # l'action setup-android@v3 est cassée depuis la disparition du paquet
+      # « tools » (cmdline-tools 16.0) — on se contente d'accepter les
+      # licences avec le sdkmanager déjà présent.
+      - name: Accepter les licences du SDK Android
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Générer le projet natif Android (expo prebuild)
         run: npx expo prebuild --platform android --no-install

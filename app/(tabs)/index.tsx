@@ -159,7 +159,7 @@ interface DragState {
 
 // ─── Canvas card: framed preview + title below ────────────────────────────────
 const CanvasCard = React.memo(function CanvasCard({
-  item, thumbH, cellWidth, styles, theme,
+  item, thumbH, thumbW, cellWidth, styles, theme,
   isDragging, isHovered, renamingName,
   onTap, onLongPress, onDragStart, onDragMove, onDragEnd,
   onOpen, onMenu, onRenameSubmit, onRenameChange,
@@ -167,6 +167,7 @@ const CanvasCard = React.memo(function CanvasCard({
 }: {
   item: CanvasMeta;
   thumbH: number;
+  thumbW: number;
   cellWidth: number;
   styles: any;
   theme: any;
@@ -207,7 +208,7 @@ const CanvasCard = React.memo(function CanvasCard({
             press is never swallowed by the drag responder. */}
         <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
           <View style={[styles.canvasFrame, { height: thumbH }, isHovered && { borderColor: theme.accent, borderWidth: 2 }]}>
-            <CanvasThumb meta={item} width={cellWidth - 28} height={thumbH} fit="none" />
+            <CanvasThumb meta={item} width={thumbW} height={thumbH} fit="none" />
           </View>
           {renamingName !== null ? (
             <TextInput
@@ -431,10 +432,13 @@ export default function VaultScreen() {
   const numColumns = activeView.columns;
   const colW = Math.floor((contentW - numColumns * GRID_GAP) / numColumns);
   // L'aperçu épouse le ratio de la toile (portrait haut, paysage bas),
-  // borné pour que les formats extrêmes restent lisibles dans la grille.
+  // borné pour que les formats extrêmes restent lisibles. La base est la
+  // largeur RÉELLE du cadre (colW - 18 : padding 8×2 + bordures) — sinon
+  // le ratio du cadre diffère de celui du contenu et l'image se déforme.
   const thumbHFor = useCallback((item: CanvasMeta) => {
+    const thumbW = colW - 18;
     const aspect = item.width > 0 ? item.width / item.height : 1;
-    return Math.round(Math.min(colW * 2.2, Math.max(colW * 0.55, colW / aspect)));
+    return Math.round(Math.min(thumbW * 2.2, Math.max(thumbW * 0.55, thumbW / aspect)));
   }, [colW]);
 
   const getCanvasDims = () => {
@@ -701,6 +705,7 @@ export default function VaultScreen() {
     <CanvasCard
       {...makeCanvasCardProps(item)}
       thumbH={thumbHFor(item)}
+      thumbW={colW - 18}
       cellWidth={colW + GRID_GAP}
       styles={styles}
       theme={theme}

@@ -60,6 +60,7 @@ export default function EditorScreen() {
   const bottomAnim = useRef(new RNAnimated.Value(0)).current;
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<DrawingCanvasHandle>(null);
+  const lastCanvasDimsRef = useRef<{ w: number; h: number } | null>(null);
   const brushSizeRef = useRef(brushSize);
   brushSizeRef.current = brushSize;
 
@@ -98,6 +99,10 @@ export default function EditorScreen() {
       if (data) {
         loadLayers(data.meta.id, data.layers, data.activeLayerId, data.groups);
         setCanvasTransparentBgState(data.meta.transparentBg === true);
+        // Toile plus grande que la zone (mobile) : on l'ajuste d'emblée,
+        // sinon une partie reste hors champ sans geste pour l'atteindre.
+        canvasRef.current?.fitToContent(data.meta.width, data.meta.height);
+        lastCanvasDimsRef.current = { w: data.meta.width, h: data.meta.height };
       }
       setCanvasLoaded(true);
       runTrigger('on_open', {
@@ -364,6 +369,19 @@ export default function EditorScreen() {
                 hitSlop={6}
               >
                 <MaterialCommunityIcons name="plus" size={16} color={theme.textSecondary} />
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
+                onPress={() => {
+                  // Ajuster : la toile entière dans la zone (après un repli
+                  // de panneau, un zoom hasardeux, ou au retour au 100 %).
+                  const d = lastCanvasDimsRef.current;
+                  if (d) canvasRef.current?.fitToContent(d.w, d.h);
+                }}
+                hitSlop={6}
+                accessibilityLabel="Ajuster la toile à la vue"
+              >
+                <MaterialCommunityIcons name="fit-to-page" size={15} color={theme.textSecondary} />
               </Pressable>
             </View>
           </View>

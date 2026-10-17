@@ -37,6 +37,7 @@ interface Props {
 // have no pinch gesture) zoom in and out from toolbar buttons or shortcuts.
 export interface DrawingCanvasHandle {
   capture: (format?: 'png' | 'jpg') => Promise<string | null>;
+  fitToContent: (contentW: number, contentH: number) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
@@ -273,6 +274,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           lastTranslateY.current = prevTY;
         }
       }
+    },
+    /** Ajuste la toile entière à la zone de travail (scale ≤ 1) — utilisé au
+        chargement d'une toile plus grande que l'écran (mobile). */
+    fitToContent: (contentW: number, contentH: number) => {
+      const k = Math.min(width / Math.max(1, contentW), height / Math.max(1, contentH), 1);
+      scale.value = k;
+      translateX.value = 0;
+      translateY.value = 0;
+      lastScale.current = k;
+      lastTranslateX.current = 0;
+      lastTranslateY.current = 0;
+      onZoomChangeRef.current?.(Math.round(k * 100));
     },
     zoomIn: () => zoomBy(1.2, width / 2, height / 2),
     zoomOut: () => zoomBy(1 / 1.2, width / 2, height / 2),

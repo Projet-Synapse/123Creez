@@ -16,6 +16,15 @@ name: Android APK (build direct, sans compte Expo)
 # « release » avec lui par défaut : l'APK s'installe sur tout appareil
 # (« sources inconnues »). Pour le Play Store, créer un vrai keystore et
 # renseigner signingConfigs.
+#
+# Garde-fous (après une série d'échecs runners en 10/2026) :
+#   • cache Gradle — les re-builds repartent des dépendances déjà là ;
+#   • lintVital exclu — l'analyse Play Store saturait la mémoire du runner ;
+#   • codegen pré-généré + 2e essai automatique — la configuration CMake
+#     peut tomber sur une cible « react_codegen_* » pas encore créée ;
+#   • timeouts par étape (45 min) — un build figé est coupé et relancé au
+#     lieu de faire attendre le job jusqu'à son terme (6 h par défaut) ;
+#   • runs concurrents annulés — un nouveau push supprime l'attente inutile.
 # ─────────────────────────────────────────────────────────────────────────
 
 on:
@@ -27,9 +36,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     env:
       # Le bundle Metro de production tient mal dans la mémoire Node par
       # défaut d'un runner GitHub.
@@ -63,20 +77,35 @@ jobs:
       - name: Générer le projet natif Android (expo prebuild)
         run: npx expo prebuild --platform android --no-install
 
-      # lintVital (analyse de conformité Play Store) sature la mémoire du
-      # runner (« Java heap space » dans PrivateApiDetector) et n'a pas
-      # d'intérêt pour un APK auto-installé hors store — on l'exclut.
-      - name: Construire l'APK (assembleRelease)
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Pré-génère les artefacts codegen des turbo modules : sans ça, la
+      # configuration CMake peut démarrer avant la création des cibles
+      # « react_codegen_* » (race « Cannot specify link libraries »).
+      - name: Pré-générer le codegen
         working-directory: android
-        run: |
-          # Pré-génère les artefacts codegen des turbo modules : sans ça, la
-          # configuration CMake peut démarrer avant la création des cibles
-          # « react_codegen_* » (race « Cannot specify link libraries »).
-          ./gradlew generateCodegenArtifactsFromSchema --no-daemon || true
-          # Deux essais : un configure tombé sur un artefact manquant passe
-          # au second (tout est déjà généré).
-          ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon \
-            || ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
+        timeout-minutes: 20
+        run: ./gradlew generateCodegenArtifactsFromSchema --no-daemon || true
+
+      # --build-cache : si un essai meurt en cours de route, le suivant
+      # réutilise les sorties des tâches déjà réussies (cache local).
+      - name: Construire l'APK (essai 1)
+        working-directory: android
+        timeout-minutes: 45
+        run: ./gradlew --build-cache assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
+
+      - name: Construire l'APK (essai 2 après échec)
+        if: failure()
+        working-directory: android
+        timeout-minutes: 45
+        run: ./gradlew --build-cache assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
 
       - name: Renommer l'APK
         run: |

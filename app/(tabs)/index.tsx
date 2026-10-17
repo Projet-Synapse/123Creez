@@ -456,34 +456,48 @@ export default function VaultScreen() {
   }, []);
 
   // Import d’image : picker (type image) -> dataURL (PNG conservé, donc
-  // transparence préservée) -> dimensions -> étape nom.
+  // transparence préservée) -> dimensions -> étape nom. Chaque étape est
+  // journalisée (console.error passe dans logcat même en release, balise
+  // ReactNativeJS) : un échec silencieux ici était indébogable côté mobile.
   const handlePickImage = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: 'image/*',
         multiple: false,
-        copyToCacheDirectory: false,
+        // true (défaut) : le fichier est copié dans le cache de l'app et
+        // l'URI renvoyé est un file:// lisible directement — sur Android le
+        // content:// du sélecteur système dépend de permissions temporaires.
+        copyToCacheDirectory: true,
       });
+      console.error('[import] picker renvoyé:', JSON.stringify({
+        canceled: result.canceled,
+        assets: result.assets?.map((a) => ({ uri: a.uri?.slice(0, 48), mimeType: a.mimeType, size: a.size })),
+      }));
       if (result.canceled || !result.assets?.length) return;
       const asset = result.assets[0];
       let src = asset.uri;
       if (!src) return;
       if (!src.startsWith('data:')) {
-        // Natif : le picker renvoie un fichier local (file://), pas un
-        // dataURL comme sur web — on lit le fichier en base64 pour retomber
-        // sur le format unique (rendu, vignette, sync). PNG conservé, donc
-        // transparence préservée.
+        // Natif : le picker renvoie un fichier local (file:// ou content://),
+        // pas un dataURL comme sur web — on lit le fichier en base64 pour
+        // retomber sur le format unique (rendu, vignette, sync). PNG
+        // conservé, donc transparence préservée.
+        console.error('[import] lecture base64 de', src.slice(0, 48));
         const base64 = await FileSystem.readAsStringAsync(src, {
           encoding: FileSystem.EncodingType.Base64,
         });
+        console.error('[import] base64 lu, longueur', base64.length);
         src = `data:${asset.mimeType || 'image/png'};base64,${base64}`;
       }
       const dims = await readImageSize(src);
+      console.error('[import] dimensions', dims.width, 'x', dims.height);
       setImportedSrc(src);
       setImportedDims({ w: dims.width, h: dims.height });
       setDimStep('name');
-    } catch {
-      // pick annulé ou fichier illisible : on reste sur la modale telle quelle
+    } catch (error) {
+      // pick annulé ou fichier illisible : on reste sur la modale telle
+      // quelle — mais l'erreur part dans logcat pour le diagnostic.
+      console.error('[import] échec:', error);
     }
   }, []);
 

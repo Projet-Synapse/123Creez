@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import React, { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import {
   View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
 } from 'react-native';
@@ -25,6 +25,10 @@ interface Props {
   // Called whenever zoom changes (pinch, wheel, or imperative zoom calls) so
   // the parent screen can show a live percentage / reset button.
   onZoomChange?: (percent: number) => void;
+  // Fond transparent de CETTE toile (damier) — prioritaire sur le réglage
+  // global canvasBg : une photo importée avec transparence se voit sur un
+  // damier même si le fond global est blanc.
+  transparentBg?: boolean;
 }
 
 // Imperative handle exposed via ref so parent screens (e.g. the editor's
@@ -90,7 +94,7 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
 }
 
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
-const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange }, ref) => {
+const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke,
     fillLayer, activeTool, activeLayerId, activeColor,
@@ -231,6 +235,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       const prevTX = lastTranslateX.current;
       const prevTY = lastTranslateY.current;
       const needsReset = prevScale !== 1 || prevTX !== 0 || prevTY !== 0;
+      const hideChecker = transparentBg === true && format === 'png';
 
       if (needsReset) {
         scale.value = 1;
@@ -243,6 +248,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         await new Promise(resolve => setTimeout(resolve, 60));
       }
 
+      // Le damier disparaît le temps de la capture (un re-render suffit).
+      if (hideChecker) {
+        setHideCheckerForCapture(true);
+        await new Promise(resolve => setTimeout(resolve, 80));
+      }
+
       try {
         const uri = await captureRef(containerRef, {
           format,
@@ -252,6 +263,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       } catch {
         return null;
       } finally {
+        if (hideChecker) setHideCheckerForCapture(false);
         if (needsReset) {
           scale.value = prevScale;
           translateX.value = prevTX;
@@ -265,7 +277,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     zoomIn: () => zoomBy(1.2, width / 2, height / 2),
     zoomOut: () => zoomBy(1 / 1.2, width / 2, height / 2),
     resetZoom: resetZoomInternal,
-  }), [scale, translateX, translateY, zoomBy, resetZoomInternal, width, height]);
+  }), [scale, translateX, translateY, zoomBy, resetZoomInternal, width, height, transparentBg]);
 
   function getDistance(touches: GestureResponderEvent['nativeEvent']['touches']) {
     if (touches.length < 2) return 0;
@@ -464,9 +476,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     ],
   }));
 
-  // Canvas background based on settings
+  // Canvas background based on settings, overridden by the per-canvas
+  // transparent flag (a transparent import shows the checker even when the
+  // global background is white).
   const canvasBg = settings.canvasBg;
-  const isTransparent = canvasBg === 'transparent';
+  const isTransparent = transparentBg === true || canvasBg === 'transparent';
+  // Pendant une capture (export), le damier est masqué : le PNG garde une
+  // transparence réelle au lieu de figer la représentation à l'écran.
+  const [hideCheckerForCapture, setHideCheckerForCapture] = useState(false);
   const bgColor = canvasBg === 'black' ? '#000000' : '#ffffff';
   const overlayColor = canvasBg === 'black' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
   const showGrid = settings.showGrid || canvasBg === 'grid';
@@ -507,9 +524,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       <Animated.View style={[{ width, height }, animatedStyle]}>
         <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
           {/* Background */}
-          {isTransparent
-            ? <CheckerBg width={width} height={height} />
-            : <Rect x={0} y={0} width={width} height={height} fill={bgColor} />
+          {transparentBg === true
+            ? (!hideCheckerForCapture && <CheckerBg width={width} height={height} />)
+            : (isTransparent
+              ? <CheckerBg width={width} height={height} />
+              : <Rect x={0} y={0} width={width} height={height} fill={bgColor} />)
           }
 
           {/* Grid / Dots overlay */}

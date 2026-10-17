@@ -36,9 +36,17 @@ function strokeToSvgPath(
   return `<path d="${d}" fill="none" stroke="${esc}"${extra ? ' ' + extra : ''}/>`;
 }
 
-/** Construit le document SVG du contenu (partagé vignette / export). */
-function buildCanvasSvg(layers: Layer[], canvasWidth: number, canvasHeight: number): string {
-  const body: string[] = [`<rect x="0" y="0" width="${canvasWidth}" height="${canvasHeight}" fill="#ffffff"/>`];
+/** Construit le document SVG du contenu (partagé vignette / export).
+    background : 'white' (défaut) ou 'none' (transparence réelle). */
+export function buildCanvasSvg(
+  layers: Layer[],
+  canvasWidth: number,
+  canvasHeight: number,
+  background: 'white' | 'none' = 'white',
+): string {
+  const body: string[] = background === 'none'
+    ? []
+    : [`<rect x="0" y="0" width="${canvasWidth}" height="${canvasHeight}" fill="#ffffff"/>`];
 
   for (const layer of layers) {
     if (!layer.visible || layer.strokes.length === 0) continue;
@@ -80,8 +88,9 @@ function buildCanvasSvg(layers: Layer[], canvasWidth: number, canvasHeight: numb
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}" viewBox="0 0 ${canvasWidth} ${canvasHeight}">${body.join('')}</svg>`;
 }
 
-/** SVG dataURL → bitmap via un canvas hors écran. */
-async function rasterizeSvg(svg: string, w: number, h: number, mime: string, quality: number): Promise<string | null> {
+/** SVG dataURL → bitmap via un canvas hors écran. skipBackground : ne peint
+    pas la couche blanche (export transparent). */
+async function rasterizeSvg(svg: string, w: number, h: number, mime: string, quality: number, skipBackground = false): Promise<string | null> {
   const image = new Image();
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   await new Promise<void>((resolve, reject) => {
@@ -94,25 +103,29 @@ async function rasterizeSvg(svg: string, w: number, h: number, mime: string, qua
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, w, h);
+  if (!skipBackground) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+  }
   ctx.drawImage(image, 0, 0, w, h);
   return canvas.toDataURL(mime, quality);
 }
 
-/** Rasterise le contenu en PNG pleine résolution (export dossier vault). */
+/** Rasterise le contenu en PNG pleine résolution (export dossier vault).
+    transparentBg : aucune couche de fond — le PNG garde sa transparence. */
 export async function renderFullPng(
   layers: Layer[],
   canvasWidth: number,
   canvasHeight: number,
+  transparentBg = false,
 ): Promise<string | null> {
   try {
     // Plafond mémoire : au-delà de 4K on dégrade proprement au 4K.
     const cap = 4096;
     const w = Math.min(canvasWidth, cap);
     const h = Math.round(w * (canvasHeight / Math.max(1, canvasWidth)));
-    const svg = buildCanvasSvg(layers, canvasWidth, canvasHeight);
-    return await rasterizeSvg(svg, w, h, 'image/png', 1);
+    const svg = buildCanvasSvg(layers, canvasWidth, canvasHeight, transparentBg ? 'none' : 'white');
+    return await rasterizeSvg(svg, w, h, 'image/png', 1, transparentBg);
   } catch {
     return null;
   }

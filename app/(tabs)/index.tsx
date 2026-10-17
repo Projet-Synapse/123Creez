@@ -18,7 +18,7 @@ import { readImageSize } from '@/services/vaultFolderService';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
 import { CanvasMeta, Folder, FolderPreviewMode, loadCanvas } from '@/services/vaultService';
-import { renderThumbnail } from '@/services/thumbnailService';
+import CanvasThumb from '@/components/feature/CanvasThumb';
 
 const FOLDER_COLORS = ['#4ecdc4', '#ff6b6b', '#ffd700', '#6bcb77', '#7c4dff', '#ff8800', '#00b0ff', '#f48fb1'];
 
@@ -197,20 +197,7 @@ const CanvasCard = React.memo(function CanvasCard({
             press is never swallowed by the drag responder. */}
         <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
           <View style={[styles.canvasFrame, { height: thumbH }, isHovered && { borderColor: theme.accent, borderWidth: 2 }]}>
-            {item.thumbnail ? (
-              <Image source={{ uri: item.thumbnail }} style={styles.canvasThumbImg} resizeMode="cover" />
-            ) : (
-              <View style={[styles.canvasThumbPlaceholder, { backgroundColor: item.thumbnailColor || '#ffffff' }]}>
-                {item.strokeCount === 0 ? (
-                  <MaterialCommunityIcons name="brush" size={30} color={theme.textMuted} />
-                ) : (
-                  <View style={styles.thumbInfo}>
-                    <Text style={styles.thumbStrokeCount}>{item.strokeCount}</Text>
-                    <Text style={styles.thumbDims}>{item.width}×{item.height}</Text>
-                  </View>
-                )}
-              </View>
-            )}
+            <CanvasThumb meta={item} width={cellWidth} height={thumbH} />
           </View>
           {renamingName !== null ? (
             <TextInput
@@ -260,7 +247,7 @@ const FolderCard = React.memo(function FolderCard({
   const gestures = useCardGestures({ onTap, onLongPress, onDragStart, onDragMove, onDragEnd });
 
   const mode: FolderPreviewMode = item.previewMode ?? 'recent';
-  const hasPreview = count > 0 && previewThumbs.some(t => t.thumbnail);
+  const hasPreview = count > 0;
 
   const body = !hasPreview || mode === 'classic' ? (
     <MaterialCommunityIcons name="folder" size={30} color={item.color} />
@@ -268,13 +255,15 @@ const FolderCard = React.memo(function FolderCard({
     <View style={styles.folderMosaic}>
       {[0, 1, 2, 3].map(i => {
         const t = previewThumbs[i];
-        return t?.thumbnail
-          ? <Image key={i} source={{ uri: t.thumbnail }} style={styles.folderMosaicCell} />
+        return t
+          ? <CanvasThumb key={t.id} meta={t} style={styles.folderMosaicCell} />
           : <View key={i} style={[styles.folderMosaicCell, styles.folderMosaicEmpty]} />;
       })}
     </View>
   ) : (
-    <Image source={{ uri: previewThumbs[0].thumbnail }} style={styles.folderPreviewImg} />
+    previewThumbs[0]
+      ? <CanvasThumb meta={previewThumbs[0]} style={styles.folderPreviewImg} />
+      : null
   );
 
   const showScrim = hasPreview && mode !== 'classic';
@@ -321,7 +310,7 @@ export default function VaultScreen() {
   const {
     canvases, folders, loading, createCanvas, removeCanvas, renameCanvas,
     moveCanvas, duplicateCanvas, createFolder, renameFolder, removeFolder,
-    reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,
+    reorderCanvases, reorderFolders, setFolderPreview,
     loadCanvasData, createImageCanvas,
   } = useVault();
 
@@ -364,6 +353,8 @@ export default function VaultScreen() {
   const [customWidth, setCustomWidth] = useState('1080');
   const [customHeight, setCustomHeight] = useState('1080');
   const [dimStep, setDimStep] = useState<'dims' | 'name'>('dims');
+  // Fond transparent (damier) demandé pour la toile importée en cours.
+  const [importTransparent, setImportTransparent] = useState(false);
   // Import d’image à la création : dataURL + dimensions de l’image source.
   const [importedSrc, setImportedSrc] = useState<string | null>(null);
   const [importedDims, setImportedDims] = useState<{ w: number; h: number } | null>(null);
@@ -504,9 +495,10 @@ export default function VaultScreen() {
   const handleCreateCanvas = useCallback(async () => {
     const name = newName.trim() || (importedSrc ? 'Toile importée' : 'Toile sans titre');
     if (importedSrc) {
-      const id = await createImageCanvas(name, importedSrc);
+      const id = await createImageCanvas(name, importedSrc, importTransparent);
       setImportedSrc(null);
       setImportedDims(null);
+      setImportTransparent(false);
       setShowNewCanvas(false);
       setNewName('');
       if (id) router.push(`/editor/${id}`);
@@ -518,7 +510,7 @@ export default function VaultScreen() {
     setShowNewCanvas(false);
     setNewName('');
     router.push(`/editor/${id}`);
-  }, [newName, activeFolderId, createCanvas, router, selectedPreset, customWidth, customHeight, importedSrc, createImageCanvas]);
+  }, [newName, activeFolderId, createCanvas, router, selectedPreset, customWidth, customHeight, importedSrc, importTransparent, createImageCanvas]);
 
   const handleCreateFolder = useCallback(async () => {
     const name = newName.trim() || 'Nouveau dossier';
@@ -684,38 +676,6 @@ export default function VaultScreen() {
     },
     onDragEnd: () => resolveDragEnd('folder', item.id),
   }), [handleContextMenu, resolveDragMove, resolveDragEnd]);
-
-  // ─── Thumbnail backfill ───────────────────────────────────────────
-  // Canvases drawn before previews existed (or never re-opened since) get
-  // their raster thumbnail generated here, one at a time, off-screen.
-  const [thumbTargetId, setThumbTargetId] = useState<string | null>(null);
-  const failedThumbs = useRef(new Set<string>());
-  useEffect(() => {
-    if (thumbTargetId) return;
-    const next = canvases.find(c =>
-      (!c.thumbnail || (c.thumbAt ?? 0) < c.updatedAt) && !failedThumbs.current.has(c.id));
-    if (next) setThumbTargetId(next.id);
-  }, [canvases, thumbTargetId]);
-
-  useEffect(() => {
-    if (!thumbTargetId) return;
-    let cancelled = false;
-    (async () => {
-      const data = await loadCanvasData(thumbTargetId);
-      if (cancelled) return;
-      if (!data) {
-        failedThumbs.current.add(thumbTargetId);
-        setThumbTargetId(null);
-        return;
-      }
-      const uri = await renderThumbnail(data.layers, data.meta.width, data.meta.height);
-      if (cancelled) return;
-      if (uri) await setCanvasThumbnail(thumbTargetId, uri);
-      else failedThumbs.current.add(thumbTargetId);
-      setThumbTargetId(null);
-    })();
-    return () => { cancelled = true; };
-  }, [thumbTargetId, loadCanvasData, setCanvasThumbnail]);
 
   const contextItem = contextMenu
     ? (contextMenu.type === 'canvas'
@@ -1066,6 +1026,22 @@ export default function VaultScreen() {
                   autoFocus
                   onSubmitEditing={handleCreateCanvas}
                 />
+                {importedSrc && (
+                  <Pressable
+                    style={[styles.importTransparentRow, { borderColor: theme.surfaceBorder }]}
+                    onPress={() => setImportTransparent(v => !v)}
+                  >
+                    <View style={[styles.importTransparentBox, importTransparent && { backgroundColor: theme.accent, borderColor: theme.accent }]}>
+                      {importTransparent && <MaterialCommunityIcons name="check" size={14} color="#0d0d0d" />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.importTransparentLabel, { color: theme.textPrimary }]}>Fond transparent (damier)</Text>
+                      <Text style={[styles.importTransparentSub, { color: theme.textMuted }]}>
+                        Pour une image avec zones transparentes — l’export PNG reste transparent
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
                 <View style={styles.modalActions}>
                   <Pressable style={styles.cancelBtn} onPress={() => { setImportedSrc(null); setImportedDims(null); setDimStep('dims'); }}>
                     <MaterialCommunityIcons name="chevron-left" size={16} color={theme.textSecondary} />
@@ -1338,7 +1314,17 @@ function makeStyles(theme: any) {
     createBtn: { flex: 1, height: 48, borderRadius: 12, backgroundColor: theme.accent, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
     btnText: { fontSize: 15, fontWeight: '600' },
     // Dimension picker
-    importBtn: {
+    importTransparentRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderWidth: 1, borderRadius: 12, padding: 10, marginTop: 8,
+  },
+  importTransparentBox: {
+    width: 20, height: 20, borderRadius: 6, borderWidth: 2,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  importTransparentLabel: { fontSize: 13, fontWeight: '600' },
+  importTransparentSub: { fontSize: 11, marginTop: 1 },
+  importBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,

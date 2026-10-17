@@ -12,9 +12,12 @@ interface Props {
   onSave: () => void;
   onExport: () => void;
   onHelp?: () => void;
+  /** Fond transparent de la toile (damier) + bascule depuis la barre. */
+  transparentBg?: boolean;
+  onToggleTransparentBg?: () => void;
 }
 
-const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport, onHelp }) => {
+const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, onExport, onHelp, transparentBg, onToggleTransparentBg }) => {
   const { activeTool, activeColor, brushSize } = useCanvas();
   const { theme, settings } = useTheme();
 
@@ -57,6 +60,24 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onSave, on
         </View>
       )}
       {!settings.showStatusBar && <View style={styles.statusArea} />}
+
+      {/* Transparent-background toggle (checker) — per-canvas setting */}
+      {onToggleTransparentBg && (
+        <Pressable
+          style={({ pressed }) => [styles.helpBtn, transparentBg
+            ? { backgroundColor: theme.accent }
+            : { backgroundColor: theme.surfaceHigh }, pressed && { opacity: 0.7 }]}
+          onPress={onToggleTransparentBg}
+          hitSlop={4}
+          accessibilityLabel="Fond transparent (damier)"
+        >
+          <MaterialCommunityIcons
+            name="checkerboard"
+            size={17}
+            color={transparentBg ? '#0d0d0d' : theme.textSecondary}
+          />
+        </Pressable>
+      )}
 
       {/* Help / keyboard shortcuts */}
       {onHelp && (

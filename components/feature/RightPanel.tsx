@@ -16,6 +16,8 @@ interface Props {
   onCloseLayers: () => void;
   visible: boolean;
   canvasId?: string;
+  /** Largeur du panneau (px) — réglable depuis l'éditeur via ResizeHandle. */
+  width?: number;
 }
 
 const TABS: { id: PanelTab; icon: string; label: string }[] = [
@@ -25,7 +27,7 @@ const TABS: { id: PanelTab; icon: string; label: string }[] = [
   { id: 'auto', icon: 'robot-outline', label: 'Auto' },
 ];
 
-const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canvasId }) => {
+const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canvasId, width = 200 }) => {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<PanelTab>('color');
 
@@ -36,7 +38,7 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
   if (!visible) return null;
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.panelBg, borderLeftColor: theme.surfaceBorder }]}>
+    <View style={[styles.container, { backgroundColor: theme.panelBg, borderLeftColor: theme.surfaceBorder, width }]}>
       {/* Tab bar */}
       <View style={[styles.tabBar, { borderBottomColor: theme.surfaceBorder }]}>
         {TABS.map(tab => {

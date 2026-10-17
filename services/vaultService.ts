@@ -20,6 +20,9 @@ export interface CanvasMeta {
   thumbAt?: number;
   /** Manual sort position (drag & drop). Lower = earlier. */
   order?: number;
+  /** Fond transparent : l'arrière-plan (éditeur, vignette, export PNG) est
+      traité comme transparent — représenté par un damier gris à l'écran. */
+  transparentBg?: boolean;
 }
 
 export interface CanvasData {
@@ -134,6 +137,20 @@ export async function setCanvasThumbnail(id: string, thumbnail: string): Promise
   meta.thumbnail = thumbnail;
   meta.thumbAt = Date.now();
   await saveCanvasMetas(metas);
+}
+
+/** Bascule le fond transparent (damier) d'une toile — meta + data. */
+export async function setCanvasTransparentBg(id: string, value: boolean): Promise<void> {
+  const metas = await getCanvasMetas();
+  const meta = metas.find(m => m.id === id);
+  if (!meta) return;
+  meta.transparentBg = value;
+  await saveCanvasMetas(metas);
+  const data = await loadCanvas(id);
+  if (data) {
+    data.meta.transparentBg = value;
+    await AsyncStorage.setItem(KEYS.CANVAS_DATA(id), JSON.stringify(data));
+  }
 }
 
 /** Persists a manual drag & drop ordering (index in the list = order). */

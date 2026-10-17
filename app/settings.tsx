@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, ScrollView, Switch, Modal, TextInput,
   ActivityIndicator, Linking,
@@ -12,6 +12,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
 import { useAlert } from '@/template';
 import { useUpdates } from '@/hooks/useUpdates';
+import ResizeHandle from '@/components/feature/ResizeHandle';
 import { RELEASES_URL } from '@/constants/config';
 import { ThemeMode, CanvasBg } from '@/services/settingsService';
 import { getStorageInfo, clearAllData, formatBytes } from '@/services/vaultService';
@@ -66,6 +67,18 @@ export default function SettingsScreen() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState<{ canvasCount: number; totalSize: number; vaultKeys: string[] } | null>(null);
   const [loadingStorage, setLoadingStorage] = useState(false);
+  // Largeur de la colonne de navigation, réglable par la poignée sur son
+  // bord droit — persistée dans les réglages au relâchement du drag.
+  const [navWidth, setNavWidth] = useState(settings.settingsNavWidth ?? 160);
+  const navWidthRef = useRef(navWidth);
+  navWidthRef.current = navWidth;
+
+  const resizeNav = useCallback((delta: number) => {
+    setNavWidth(Math.min(320, Math.max(120, navWidthRef.current + delta)));
+  }, []);
+  const commitNavWidth = useCallback(() => {
+    updateSettings({ settingsNavWidth: navWidthRef.current });
+  }, [updateSettings]);
 
   const styles = makeStyles(theme);
 
@@ -135,8 +148,8 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.body}>
-        {/* Left nav */}
-        <ScrollView style={styles.navCol} showsVerticalScrollIndicator={false}>
+        {/* Left nav — width adjustable via the handle on its right edge. */}
+        <ScrollView style={[styles.navCol, { width: navWidth }]} showsVerticalScrollIndicator={false}>
           {SECTIONS.map(s => (
             <Pressable
               key={s.id}
@@ -152,6 +165,13 @@ export default function SettingsScreen() {
             </Pressable>
           ))}
         </ScrollView>
+
+        <ResizeHandle
+          panelSide="right"
+          onResize={resizeNav}
+          onResizeEnd={commitNavWidth}
+          borderColor={theme.surfaceBorder}
+        />
 
         {/* Right content */}
         <ScrollView style={styles.contentCol} showsVerticalScrollIndicator={false}>

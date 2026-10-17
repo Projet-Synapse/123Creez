@@ -4,7 +4,7 @@
 // paint the same stroke data, so the SVG path builder and the layer renderer
 // live here. Everything is pure vector rendering — no gesture handling.
 import React from 'react';
-import { Svg, Path, Rect, Defs, Mask, G, Image as SvgImage } from 'react-native-svg';
+import { Svg, Path, Rect, Defs, Mask, G, Pattern, Image as SvgImage } from 'react-native-svg';
 import { StrokePath, LayerImage } from '@/contexts/CanvasContext';
 
 export function buildSvgPath(stroke: StrokePath, dx = 0, dy = 0): string {
@@ -44,6 +44,10 @@ interface CanvasArtProps {
   layers: LayerLike[];
   width: number;
   height: number;
+  /** Dimensions LOGIQUES du contenu (coordonnées des traits) quand elles
+      diffèrent de la taille rendue — le SVG scale via viewBox (vignettes). */
+  contentWidth?: number;
+  contentHeight?: number;
   /** Unique per mount — keeps SVG mask ids from colliding when the same
       layer is painted twice (floating selection renders two copies). */
   variant: string;
@@ -55,18 +59,23 @@ interface CanvasArtProps {
   /** Wrap the drawn strokes in an existing SVG mask (used to clip the
       selection's inside/outside halves). Fills are never masked. */
   maskId?: string;
-  /** Opaque background color painted below everything (thumbnails). */
-  bg?: string | null;
+  /** Opaque background painted below everything (thumbnails) : une couleur,
+      'checker' pour le damier de transparence, ou null (aucun fond —
+      transparence réelle). */
+  bg?: string | 'checker' | null;
 }
 
 /** Renders background fill rects + all stroke layers (eraser-aware via SVG
     masks). Pure output — no gestures, no state. */
 export function CanvasArt({
   layers, width, height, variant,
+  contentWidth, contentHeight,
   translate = { x: 0, y: 0 }, includeFill = true, maskId, bg = null,
 }: CanvasArtProps) {
   const dx = translate.x;
   const dy = translate.y;
+  const vbW = contentWidth ?? width;
+  const vbH = contentHeight ?? height;
 
   const content = layers.map(layer => {
     if (!layer.visible) return null;
@@ -108,14 +117,14 @@ export function CanvasArt({
         {includeFill && fillStrokes.length > 0 && (() => {
           const lastFill = fillStrokes[fillStrokes.length - 1];
           return (
-            <Rect x={0} y={0} width={width} height={height} fill={lastFill.color} opacity={lastFill.opacity} />
+            <Rect x={0} y={0} width={vbW} height={vbH} fill={lastFill.color} opacity={lastFill.opacity} />
           );
         })()}
         {eraserStrokes.length > 0 ? (
           <>
             <Defs>
-              <Mask id={eraserMaskId} x="0" y="0" width={width} height={height}>
-                <Rect x={0} y={0} width={width} height={height} fill="white" />
+              <Mask id={eraserMaskId} x="0" y="0" width={vbW} height={vbH}>
+                <Rect x={0} y={0} width={vbW} height={vbH} fill="white" />
                 {eraserStrokes.map(stroke => {
                   const d = buildSvgPath(stroke, dx, dy);
                   if (!d) return null;
@@ -143,8 +152,37 @@ export function CanvasArt({
   const wrapped = maskId ? <G mask={`url(#${maskId})`}>{content}</G> : content;
 
   return (
-    <Svg width={width} height={height} style={{ position: 'absolute', left: 0, top: 0 }}>
-      {bg ? <Rect x={0} y={0} width={width} height={height} fill={bg} /> : null}
+    <Svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${vbW} ${vbH}`}
+      preserveAspectRatio="xMidYMid slice"
+      style={{ position: 'absolute', left: 0, top: 0 }}
+    >
+      {bg === 'checker' ? (
+        <>
+          <Defs>
+            {/* Id suffixé par variant : plusieurs SVG cohabitent (grille du
+                vault, copies flottantes de sélection). Le motif est dimensionné
+                en unités logiques pour rester ~12 px À L'ÉCRAN quelle que soit
+                l'échelle du viewBox. */}
+            <Pattern
+              id={`checker-${variant}`}
+              width={24 * (vbW / width)}
+              height={24 * (vbH / height)}
+              patternUnits="userSpaceOnUse"
+            >
+              <Rect x="0" y="0" width={12 * (vbW / width)} height={12 * (vbH / height)} fill="#cccccc" />
+              <Rect x={12 * (vbW / width)} y="0" width={12 * (vbW / width)} height={12 * (vbH / height)} fill="#f5f5f5" />
+              <Rect x="0" y={12 * (vbH / height)} width={12 * (vbW / width)} height={12 * (vbH / height)} fill="#f5f5f5" />
+              <Rect x={12 * (vbW / width)} y={12 * (vbH / height)} width={12 * (vbW / width)} height={12 * (vbH / height)} fill="#cccccc" />
+            </Pattern>
+          </Defs>
+          <Rect x={0} y={0} width={vbW} height={vbH} fill={`url(#checker-${variant})`} />
+        </>
+      ) : bg ? (
+        <Rect x={0} y={0} width={vbW} height={vbH} fill={bg} />
+      ) : null}
       {wrapped}
     </Svg>
   );

@@ -9,7 +9,7 @@ import {
   saveFolder, deleteFolder, setCanvasThumbnail as persistThumbnail,
   setCanvasOrder as persistCanvasOrder, setFoldersOrder as persistFoldersOrder,
   setFolderPreviewMode as persistFolderPreviewMode,
-  loadCanvas, createDefaultCanvas, generateId,
+  loadCanvas, createDefaultCanvas, generateId, setCanvasTransparentBg,
   computeThumbnailColor, computeStrokeCount,
 } from '@/services/vaultService';
 import { Layer, LayerGroup } from '@/contexts/CanvasContext';
@@ -27,9 +27,10 @@ interface VaultContextType {
 
   createCanvas: (name: string, folderId?: string | null, width?: number, height?: number) => Promise<string>;
   /** Crée une toile depuis une image (import du dossier vault). */
-  createImageCanvas: (name: string, src: string) => Promise<string | null>;
+  createImageCanvas: (name: string, src: string, transparentBg?: boolean) => Promise<string | null>;
   removeCanvas: (id: string) => Promise<void>;
   renameCanvas: (id: string, name: string) => Promise<void>;
+  setCanvasTransparentBg: (id: string, value: boolean) => Promise<void>;
   moveCanvas: (id: string, folderId: string | null) => Promise<void>;
   duplicateCanvas: (id: string) => Promise<string>;
 
@@ -95,6 +96,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const renameCanvasFn = useCallback(async (id: string, name: string) => {
     await renameCanvas(id, name);
     setCanvases(prev => prev.map(c => c.id === id ? { ...c, name, updatedAt: Date.now() } : c));
+  }, []);
+
+  const setCanvasTransparentBgFn = useCallback(async (id: string, value: boolean) => {
+    await setCanvasTransparentBg(id, value);
+    setCanvases(prev => prev.map(c => c.id === id ? { ...c, transparentBg: value } : c));
   }, []);
 
   const moveCanvas = useCallback(async (id: string, folderId: string | null) => {
@@ -207,7 +213,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setCanvases(prev => prev.map(c => c.id === id ? updatedMeta : c));
     // Miroir explorateur : PNG pleine résolution dans le dossier lié.
     if (vaultFolderAvailable()) {
-      exportCanvasToFolder(updatedMeta.name, id, layers, updatedMeta.width, updatedMeta.height)
+      exportCanvasToFolder(updatedMeta.name, id, layers, updatedMeta.width, updatedMeta.height, updatedMeta.transparentBg === true)
         .catch(() => { });
     }
     schedulePush();
@@ -218,7 +224,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** Import dossier : image → nouvelle toile (calque image ajusté). */
-  const createImageCanvas = useCallback(async (name: string, src: string): Promise<string | null> => {
+  const createImageCanvas = useCallback(async (name: string, src: string, transparentBg = false): Promise<string | null> => {
     try {
       const { width, height } = await readImageSize(src);
       // Plafond raisonnable pour les très grandes photos.
@@ -234,6 +240,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
           id, name: name.replace(/\.[a-zA-Z0-9]+$/, ''), folderId: null,
           createdAt: now, updatedAt: now, width: w, height: h,
           thumbnailColor: '#ffffff', strokeCount: 0,
+          transparentBg,
         },
         layers: [{
           id: layerId, name: 'Image', visible: true, opacity: 1, strokes: [],
@@ -279,6 +286,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     <VaultContext.Provider value={{
       canvases, folders, loading,
       createCanvas, removeCanvas, renameCanvas: renameCanvasFn, moveCanvas, duplicateCanvas,
+      setCanvasTransparentBg: setCanvasTransparentBgFn,
       createFolder, renameFolder, removeFolder, createImageCanvas,
       reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,
       persistCanvas, loadCanvasData, reload,

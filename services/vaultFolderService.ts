@@ -42,11 +42,12 @@ export async function exportCanvasToFolder(
   layers: Layer[],
   canvasWidth: number,
   canvasHeight: number,
+  transparentBg = false,
 ): Promise<boolean> {
   if (!vaultFolderAvailable()) return false;
   try {
     const { renderFullPng } = await import('@/services/thumbnailService');
-    const png = await renderFullPng(layers, canvasWidth, canvasHeight);
+    const png = await renderFullPng(layers, canvasWidth, canvasHeight, transparentBg);
     if (!png) return false;
     const fileName = `${sanitizeFileName(name)}--${canvasId}.png`;
     const result = await desktop()!.vaultFolder!.writeImage(fileName, png);

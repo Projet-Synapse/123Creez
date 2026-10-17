@@ -18,6 +18,7 @@ import DrawingCanvas, { DrawingCanvasHandle } from '@/components/feature/Drawing
 import ToolBar from '@/components/feature/ToolBar';
 import RightPanel from '@/components/feature/RightPanel';
 import EditorTopBar from '@/components/feature/EditorTopBar';
+import ResizeHandle from '@/components/feature/ResizeHandle';
 import { Tool } from '@/contexts/CanvasContext';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
@@ -32,7 +33,7 @@ export default function EditorScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert } = useAlert();
-  const { theme, settings } = useTheme();
+  const { theme, settings, updateSettings } = useTheme();
   const {
     history, redoStack, undo, redo, clearCanvas, loadLayers, layers, layerGroups,
     activeLayerId, isDirty, markClean, setActiveTool, setActiveColor,
@@ -40,11 +41,18 @@ export default function EditorScreen() {
     brushOpacity, activeTool, activeColor, clearSelection, commitSelection,
     selection,
   } = useCanvas();
-  const { loadCanvasData, persistCanvas, canvases } = useVault();
+  const { loadCanvasData, persistCanvas, canvases, setCanvasTransparentBg } = useVault();
   const { runTrigger, recording } = useAutomation();
 
   const [showLayers, setShowLayers] = useState(false);
   const [panelVisible, setPanelVisible] = useState(true);
+  // Largeur du panneau droit, réglable par la poignée sur son bord — la
+  // valeur persiste dans les réglages au relâchement du drag.
+  const [panelWidth, setPanelWidth] = useState(settings.editorPanelWidth ?? 200);
+  const panelWidthRef = useRef(panelWidth);
+  panelWidthRef.current = panelWidth;
+  // Fond transparent (damier) de CETTE toile — lu du meta au chargement.
+  const [canvasTransparentBg, setCanvasTransparentBgState] = useState(false);
   const [canvasLoaded, setCanvasLoaded] = useState(false);
   const [bottomExpanded, setBottomExpanded] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
@@ -55,7 +63,22 @@ export default function EditorScreen() {
   const brushSizeRef = useRef(brushSize);
   brushSizeRef.current = brushSize;
 
-  const RIGHTPANEL_WIDTH = panelVisible ? 200 : 0;
+  const RIGHTPANEL_WIDTH = panelVisible ? panelWidth : 0;
+  const resizePanel = useCallback((delta: number) => {
+    setPanelWidth(Math.min(420, Math.max(150, panelWidthRef.current + delta)));
+  }, []);
+  const commitPanelWidth = useCallback(() => {
+    updateSettings({ editorPanelWidth: panelWidthRef.current });
+  }, [updateSettings]);
+
+  // Bascule du fond transparent (damier) — le meta est persisté immédiatement
+  // (pas besoin de passer par la sauvegarde de la toile).
+  const toggleTransparentBg = useCallback(() => {
+    if (!id) return;
+    const next = !canvasTransparentBg;
+    setCanvasTransparentBgState(next);
+    setCanvasTransparentBg(id, next);
+  }, [id, canvasTransparentBg, setCanvasTransparentBg]);
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
   const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom - TOPBAR_HEIGHT - BOTTOM_PANEL_HEIGHT;
   // Honor the "Position de la barre d'outils" setting — the bar docks to the
@@ -72,7 +95,10 @@ export default function EditorScreen() {
   useEffect(() => {
     if (!id) return;
     loadCanvasData(id).then(async data => {
-      if (data) loadLayers(data.meta.id, data.layers, data.activeLayerId, data.groups);
+      if (data) {
+        loadLayers(data.meta.id, data.layers, data.activeLayerId, data.groups);
+        setCanvasTransparentBgState(data.meta.transparentBg === true);
+      }
       setCanvasLoaded(true);
       runTrigger('on_open', {
         setTool: (t) => setActiveTool(t as Tool),
@@ -289,6 +315,8 @@ export default function EditorScreen() {
         onSave={handleSave}
         onExport={handleExport}
         onHelp={() => setShowShortcuts(true)}
+        transparentBg={canvasTransparentBg}
+        onToggleTransparentBg={toggleTransparentBg}
       />
 
       <View style={styles.workspace}>
@@ -314,7 +342,7 @@ export default function EditorScreen() {
             backgroundColor: workspaceBg,
           }]}>
             <View style={styles.canvasContainer}>
-              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} />
+              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} transparentBg={canvasTransparentBg} />
             </View>
 
             {/* Zoom controls — the only way to zoom for mouse/trackpad users,
@@ -456,11 +484,21 @@ export default function EditorScreen() {
           </RNAnimated.View>
         </View>
 
+        {panelVisible && (
+          <ResizeHandle
+            panelSide="left"
+            onResize={resizePanel}
+            onResizeEnd={commitPanelWidth}
+            borderColor={theme.surfaceBorder}
+          />
+        )}
+
         <RightPanel
           showLayers={showLayers}
           onCloseLayers={() => setShowLayers(false)}
           visible={panelVisible}
           canvasId={id}
+          width={panelWidth}
         />
 
         {toolbarRight && (

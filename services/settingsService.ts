@@ -29,6 +29,9 @@ export interface AppSettings {
   autoFullscreen: boolean;
   realtimeThumbnail: boolean;
   language: string;
+  // Largeurs des barres latérales (px), réglables à la souris par poignées.
+  editorPanelWidth: number;
+  settingsNavWidth: number;
   // Performance
   hiDpiRendering: boolean;
   antialiasing: boolean;
@@ -70,6 +73,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoFullscreen: false,
   realtimeThumbnail: false,
   language: 'fr',
+  editorPanelWidth: 200,
+  settingsNavWidth: 160,
   // Performance
   hiDpiRendering: true,
   antialiasing: true,

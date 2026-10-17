@@ -70,10 +70,12 @@ interface CardLayout {
 const GRID_GAP = 10;
 
 // ─── Shared card gesture handling ─────────────────────────────────────────────
-// Mouse-first drag: a horizontal-ish press+move grabs the card (vertical
-// swipes still scroll the page); once grabbed, the drag can steer anywhere.
-// A clean release without movement is the tap; holding still ~550ms opens
-// the context menu. Callbacks flow through refs to dodge stale closures.
+// Souris ET tactile : l'appui immobile est capté dès le doigt posé — un
+// relâchement sans mouvement est le TAP (ouvre la toile), ~550 ms sans
+// bouger ouvre le menu. Le scroll vertical reprend la main tant qu'aucun
+// drag horizontal n'a démarré (les flicks continuent de faire défiler la
+// grille) ; une fois le drag commencé, il peut partir dans tous les sens.
+// Callbacks through refs to dodge stale closures.
 interface CardGesturesOpts {
   onTap: () => void;
   onLongPress: () => void;
@@ -93,10 +95,12 @@ function useCardGestures(opts: CardGesturesOpts) {
     onStartShouldSetPanResponderCapture: (e: GestureResponderEvent) => {
       // Mouse: claim immediately (the wheel scrolls, and nested Pressables
       // would otherwise hold the responder and block the steal on move).
-      // Touch: negotiate on move instead so flicks keep scrolling the page.
       return ((e.nativeEvent as any)?.type ?? '').startsWith('mouse');
     },
-    onStartShouldSetPanResponder: () => false,
+    // Touch: claim on finger-down TOO — sans ça, un tap immobile n'était
+    // jamais remis à la carte (release non reçue) et n'ouvrait rien sur
+    // Android ; le scroll vertical repasse par TerminationRequest.
+    onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
       // Touch path (mouse already claimed on start): horizontal-first, or any
       // direction once held — quick flicks keep scrolling the page.
@@ -133,7 +137,13 @@ function useCardGestures(opts: CardGesturesOpts) {
       if (moved.current) cb.current.onDragEnd();
       moved.current = false;
     },
-    onPanResponderTerminationRequest: () => false,
+    onPanResponderTerminationRequest: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
+      // Scroll vertical : il garde la main tant qu'aucun drag (horizontal ou
+      // appui long tenu) n'a réellement commencé.
+      const held = Date.now() - startedAt.current > 300;
+      return !moved.current && !held
+        && !(Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy));
+    },
   })).current;
 }
 
@@ -197,7 +207,7 @@ const CanvasCard = React.memo(function CanvasCard({
             press is never swallowed by the drag responder. */}
         <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
           <View style={[styles.canvasFrame, { height: thumbH }, isHovered && { borderColor: theme.accent, borderWidth: 2 }]}>
-            <CanvasThumb meta={item} width={cellWidth} height={thumbH} />
+            <CanvasThumb meta={item} width={cellWidth - 28} height={thumbH} fit="none" />
           </View>
           {renamingName !== null ? (
             <TextInput

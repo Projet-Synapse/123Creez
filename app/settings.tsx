@@ -74,7 +74,7 @@ export default function SettingsScreen() {
   navWidthRef.current = navWidth;
 
   const resizeNav = useCallback((delta: number) => {
-    setNavWidth(Math.min(320, Math.max(120, navWidthRef.current + delta)));
+    setNavWidth(Math.min(320, Math.max(64, navWidthRef.current + delta)));
   }, []);
   const commitNavWidth = useCallback(() => {
     updateSettings({ settingsNavWidth: navWidthRef.current });

@@ -502,6 +502,25 @@ export default function EditorScreen() {
           width={panelWidth}
         />
 
+        {/* Replier/déplier le panneau depuis la zone de dessin — accessible
+            sans viser la barre d'outils quand on dessine. */}
+        <Pressable
+          style={({ pressed }) => [styles.panelFloatBtn, {
+            right: panelVisible ? panelWidth + 12 : 12,
+            backgroundColor: theme.panelBg,
+            borderColor: theme.surfaceBorder,
+          }, pressed && { opacity: 0.7 }]}
+          onPress={() => setPanelVisible(v => !v)}
+          hitSlop={4}
+          accessibilityLabel={panelVisible ? 'Replier le panneau' : 'Déplier le panneau'}
+        >
+          <MaterialCommunityIcons
+            name={panelVisible ? 'arrow-collapse-right' : 'dock-right'}
+            size={20}
+            color={theme.textSecondary}
+          />
+        </Pressable>
+
         {toolbarRight && (
           <ToolBar
             onUndo={undo}
@@ -575,6 +594,14 @@ const styles = StyleSheet.create({
   canvasContainer: {
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5, shadowRadius: 16, elevation: 12,
+  },
+  panelFloatBtn: {
+    position: 'absolute',
+    bottom: BOTTOM_PANEL_HEIGHT + 12,
+    width: 42, height: 42, borderRadius: 21,
+    borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+    zIndex: 30,
   },
   zoomControls: {
     position: 'absolute', bottom: 12, right: 12,

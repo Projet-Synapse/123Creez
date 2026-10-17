@@ -28,10 +28,13 @@ interface CanvasThumbProps {
       absentes, le conteneur est mesuré au layout (cellules en %). */
   width?: number;
   height?: number;
+  /** 'none' : la carte (au ratio de la toile) montre la toile ENTIÈRE sans
+      rognage ; 'slice' : remplit et rogne (mosaïque décorative). */
+  fit?: 'none' | 'slice';
   style?: Record<string, unknown> | object;
 }
 
-const CanvasThumb: React.FC<CanvasThumbProps> = ({ meta, width, height, style }) => {
+const CanvasThumb: React.FC<CanvasThumbProps> = ({ meta, width, height, fit = 'slice', style }) => {
   const key = cacheKey(meta);
   const [data, setData] = useState<CanvasData | 'missing' | null>(() => previewCache.get(key) ?? null);
   const [measured, setMeasured] = useState<{ w: number; h: number } | null>(null);
@@ -82,7 +85,7 @@ const CanvasThumb: React.FC<CanvasThumbProps> = ({ meta, width, height, style })
           contentHeight={meta.height}
           variant={`thumb-${meta.id}-${meta.updatedAt}`}
           bg={meta.transparentBg ? 'checker' : '#ffffff'}
-          preserveAspect="meet"
+          preserveAspect={fit}
         />
       ) : (
         <View style={[styles.placeholder, { backgroundColor: meta.thumbnailColor || '#ffffff' }]}>

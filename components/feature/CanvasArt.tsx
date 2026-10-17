@@ -65,7 +65,7 @@ interface CanvasArtProps {
   bg?: string | 'checker' | null;
   /** 'slice' (remplit, rogne) ou 'meet' (entier visible) pour l'échelle du
       viewBox — les vignettes des cartes utilisent 'meet'. */
-  preserveAspect?: 'slice' | 'meet';
+  preserveAspect?: 'slice' | 'meet' | 'none';
 }
 
 /** Renders background fill rects + all stroke layers (eraser-aware via SVG

@@ -171,6 +171,7 @@ export default function SettingsScreen() {
           onResize={resizeNav}
           onResizeEnd={commitNavWidth}
           borderColor={theme.surfaceBorder}
+          activeColor={theme.accent}
         />
 
         {/* Right content */}

@@ -420,9 +420,11 @@ export default function VaultScreen() {
   const contentW = Math.min(winW, 1400) - 32;
   const numColumns = activeView.columns;
   const colW = Math.floor((contentW - numColumns * GRID_GAP) / numColumns);
+  // L'aperçu épouse le ratio de la toile (portrait haut, paysage bas),
+  // borné pour que les formats extrêmes restent lisibles dans la grille.
   const thumbHFor = useCallback((item: CanvasMeta) => {
     const aspect = item.width > 0 ? item.width / item.height : 1;
-    return Math.round(Math.min(260, Math.max(80, colW / aspect)));
+    return Math.round(Math.min(colW * 2.2, Math.max(colW * 0.55, colW / aspect)));
   }, [colW]);
 
   const getCanvasDims = () => {

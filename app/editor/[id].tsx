@@ -490,6 +490,7 @@ export default function EditorScreen() {
             onResize={resizePanel}
             onResizeEnd={commitPanelWidth}
             borderColor={theme.surfaceBorder}
+            activeColor={theme.accent}
           />
         )}
 

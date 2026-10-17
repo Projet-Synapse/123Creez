@@ -63,6 +63,9 @@ interface CanvasArtProps {
       'checker' pour le damier de transparence, ou null (aucun fond —
       transparence réelle). */
   bg?: string | 'checker' | null;
+  /** 'slice' (remplit, rogne) ou 'meet' (entier visible) pour l'échelle du
+      viewBox — les vignettes des cartes utilisent 'meet'. */
+  preserveAspect?: 'slice' | 'meet';
 }
 
 /** Renders background fill rects + all stroke layers (eraser-aware via SVG
@@ -71,6 +74,7 @@ export function CanvasArt({
   layers, width, height, variant,
   contentWidth, contentHeight,
   translate = { x: 0, y: 0 }, includeFill = true, maskId, bg = null,
+  preserveAspect = 'slice',
 }: CanvasArtProps) {
   const dx = translate.x;
   const dy = translate.y;
@@ -156,7 +160,7 @@ export function CanvasArt({
       width={width}
       height={height}
       viewBox={`0 0 ${vbW} ${vbH}`}
-      preserveAspectRatio="xMidYMid slice"
+      preserveAspectRatio={`xMidYMid ${preserveAspect}`}
       style={{ position: 'absolute', left: 0, top: 0 }}
     >
       {bg === 'checker' ? (

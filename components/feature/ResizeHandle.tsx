@@ -12,18 +12,22 @@ import React, { useRef } from 'react';
 import { View, StyleSheet, PanResponder, Platform, type GestureResponderEvent } from 'react-native';
 
 interface ResizeHandleProps {
-  /** Sens dans lequel le panneau s'agrandit quand on tire vers la droite :
-      'right' (poignée à gauche du panneau, +1) ou 'left' (poignée à droite du
-      panneau, -1). Sert à convertir le delta souris en delta de largeur. */
+  /** Côté où se trouve LE PANNEAU par rapport à la poignée. Le bord suit
+      toujours le curseur : poignée sur le bord DROIT du panneau ('right'),
+      tirer vers la droite agrandit ; poignée sur le bord GAUCHE ('left'),
+      tirer vers la gauche agrandit. */
   panelSide: 'left' | 'right';
   onResize: (widthDelta: number) => void;
   onResizeEnd: () => void;
   borderColor: string;
+  /** Couleur d'accentuation affichée pendant le drag. */
+  activeColor?: string;
 }
 
-const ResizeHandle: React.FC<ResizeHandleProps> = ({ panelSide, onResize, onResizeEnd, borderColor }) => {
+const ResizeHandle: React.FC<ResizeHandleProps> = ({ panelSide, onResize, onResizeEnd, borderColor, activeColor }) => {
   const grantX = useRef(0);
-  const sign = panelSide === 'left' ? 1 : -1;
+  const [dragging, setDragging] = React.useState(false);
+  const sign = panelSide === 'right' ? 1 : -1;
 
   const pan = useRef(
     PanResponder.create({
@@ -32,12 +36,13 @@ const ResizeHandle: React.FC<ResizeHandleProps> = ({ panelSide, onResize, onResi
       onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderGrant: (e: GestureResponderEvent) => {
         grantX.current = e.nativeEvent.pageX;
+        setDragging(true);
       },
       onPanResponderMove: (e: GestureResponderEvent) => {
         onResize(sign * (e.nativeEvent.pageX - grantX.current));
       },
-      onPanResponderRelease: () => onResizeEnd(),
-      onPanResponderTerminate: () => onResizeEnd(),
+      onPanResponderRelease: () => { setDragging(false); onResizeEnd(); },
+      onPanResponderTerminate: () => { setDragging(false); onResizeEnd(); },
     }),
   ).current;
 
@@ -46,18 +51,20 @@ const ResizeHandle: React.FC<ResizeHandleProps> = ({ panelSide, onResize, onResi
       {...pan.panHandlers}
       style={[
         styles.handle,
-        { backgroundColor: borderColor },
+        { backgroundColor: dragging && activeColor ? activeColor : borderColor },
+        dragging && { opacity: 1 },
         Platform.OS === 'web' && ({ cursor: 'ew-resize' } as Record<string, string>),
       ]}
+      hitSlop={{ left: 12, right: 12 }}
     />
   );
 };
 
 const styles = StyleSheet.create({
   handle: {
-    width: 8,
+    width: 14,
     alignSelf: 'stretch',
-    opacity: 0.35,
+    opacity: 0.4,
   },
 });
 

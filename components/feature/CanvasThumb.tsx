@@ -82,6 +82,7 @@ const CanvasThumb: React.FC<CanvasThumbProps> = ({ meta, width, height, style })
           contentHeight={meta.height}
           variant={`thumb-${meta.id}-${meta.updatedAt}`}
           bg={meta.transparentBg ? 'checker' : '#ffffff'}
+          preserveAspect="meet"
         />
       ) : (
         <View style={[styles.placeholder, { backgroundColor: meta.thumbnailColor || '#ffffff' }]}>

@@ -96,12 +96,14 @@ const MIME_TYPES = {
 // Réponse construite à la main plutôt que net.fetch(file://) : sans en-tête
 // explicite, Chromium mettait les réponses app:// en cache HTTP de façon
 // heuristique — après un correctif du bundle, le renderer rechargeait
-// l'ancien JS. « no-cache » impose la revalidation (fichiers locaux : quasi
-// gratuit) tout en gardant le HTTP cache pour les recharges de session.
+// l'ancien JS. « no-cache » s'est révélé insuffisant (le cache MÉMOIRE de
+// session peut resservir sans revalider : constaté en v1.0.9, un ancien
+// bundle est resté vivant après déploiement) → « no-store » interdit tout
+// stockage. Les fichiers sont locaux : le coût de relecture est nul.
 function fileResponse(file) {
   const data = fs.readFileSync(file);
   const type = MIME_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
-  return new Response(data, { headers: { 'Content-Type': type, 'Cache-Control': 'no-cache' } });
+  return new Response(data, { headers: { 'Content-Type': type, 'Cache-Control': 'no-store' } });
 }
 
 function registerAppProtocol() {

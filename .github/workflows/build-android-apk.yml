@@ -63,8 +63,11 @@ jobs:
       - name: Générer le projet natif Android (expo prebuild)
         run: npx expo prebuild --platform android --no-install
 
+      # lintVital (analyse de conformité Play Store) sature la mémoire du
+      # runner (« Java heap space » dans PrivateApiDetector) et n'a pas
+      # d'intérêt pour un APK auto-installé hors store — on l'exclut.
       - name: Construire l'APK (assembleRelease)
-        run: cd android && ./gradlew assembleRelease --no-daemon
+        run: cd android && ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
 
       - name: Renommer l'APK
         run: |

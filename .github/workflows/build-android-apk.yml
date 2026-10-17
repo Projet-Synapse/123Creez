@@ -67,7 +67,16 @@ jobs:
       # runner (« Java heap space » dans PrivateApiDetector) et n'a pas
       # d'intérêt pour un APK auto-installé hors store — on l'exclut.
       - name: Construire l'APK (assembleRelease)
-        run: cd android && ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
+        working-directory: android
+        run: |
+          # Pré-génère les artefacts codegen des turbo modules : sans ça, la
+          # configuration CMake peut démarrer avant la création des cibles
+          # « react_codegen_* » (race « Cannot specify link libraries »).
+          ./gradlew generateCodegenArtifactsFromSchema --no-daemon || true
+          # Deux essais : un configure tombé sur un artefact manquant passe
+          # au second (tout est déjà généré).
+          ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon \
+            || ./gradlew assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
 
       - name: Renommer l'APK
         run: |

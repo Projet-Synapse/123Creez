@@ -13,6 +13,7 @@ import { FontSize } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useVault } from '@/hooks/useVault';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { readImageSize } from '@/services/vaultFolderService';
 import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
@@ -465,10 +466,18 @@ export default function VaultScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       const asset = result.assets[0];
-      // expo-document-picker (web, base64 par défaut) renvoie déjà un
-      // dataURL dans asset.uri — PNG conservé, donc transparence préservée.
-      const src = asset.uri;
+      let src = asset.uri;
       if (!src) return;
+      if (!src.startsWith('data:')) {
+        // Natif : le picker renvoie un fichier local (file://), pas un
+        // dataURL comme sur web — on lit le fichier en base64 pour retomber
+        // sur le format unique (rendu, vignette, sync). PNG conservé, donc
+        // transparence préservée.
+        const base64 = await FileSystem.readAsStringAsync(src, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        src = `data:${asset.mimeType || 'image/png'};base64,${base64}`;
+      }
       const dims = await readImageSize(src);
       setImportedSrc(src);
       setImportedDims({ w: dims.width, h: dims.height });

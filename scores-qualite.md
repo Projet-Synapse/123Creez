@@ -3,7 +3,7 @@
 | Dimension | Score |
 |---|---|
 | ♻ Ergonomie | 7/10 |
-| 👍 Stabilité | 6/10 |
+| 👍 Stabilité | 7/10 |
 | 🔰 Sécurité | 6/10 |
 | 🗂 Organisation | 6/10 |
 | 🚀 Performance | 6/10 |
@@ -11,6 +11,7 @@
 ## Tâches
 
 ### 👍 Stabilité
+- [x] Réparer le workflow APK (setup-android@v3 : paquet « tools » disparu des runners GitHub — remplacé par sdkmanager --licenses direct ; débloqué via scope workflow du jeton) (+1) — v1.0.6 buildée et installée sur le téléphone
 - [ ] Ajouter des tests unitaires sur le découpage du lasso (`selectionService`) (+1)
 - [ ] Corriger les erreurs de typing baseline (Href expo-router dans index.tsx) (+1)
 - [ ] Gérer les collisions de données lors d'une future sync distante (+1)

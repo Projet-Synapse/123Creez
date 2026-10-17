@@ -1,4 +1,5 @@
-// Powered by OnSpace.AI — Miroir explorateur du vault (desktop uniquement).
+// Powered by OnSpace.AI — Miroir explorateur du vault (desktop) et
+// utilitaires image partagés (import de toile, toutes plateformes).
 //
 // Un dossier disque choisi par l'utilisateur est lié au vault :
 //  - chaque toile sauvegardée y est exportée en PNG (pleine résolution) ;
@@ -7,6 +8,7 @@
 // Les exports de l'app sont reconnaissables à leur suffixe `--<id>.png` et
 // ne sont jamais réimportés — sinon la boucle export→import doublerait
 // chaque toile à chaque ouverture.
+import { Image as RNImage, Platform } from 'react-native';
 import { isDesktop, desktop } from '@/services/platform';
 import { Layer, LayerImage } from '@/contexts/CanvasContext';
 
@@ -54,8 +56,19 @@ export async function exportCanvasToFolder(
   }
 }
 
-/** Dimensionne une image (dataURL) sans l'altérer. */
+/** Dimensionne une image (dataURL, ou fichier natif) sans l'altérer. */
 export function readImageSize(src: string): Promise<{ width: number; height: number }> {
+  if (Platform.OS !== 'web') {
+    // Natif : window.Image n'existe pas — le loader RN décode dataURL et
+    // file:// indifféremment.
+    return new Promise((resolve, reject) => {
+      RNImage.getSize(
+        src,
+        (width, height) => resolve({ width, height }),
+        () => reject(new Error('image load failed')),
+      );
+    });
+  }
   return new Promise((resolve, reject) => {
     const image = new window.Image();
     image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });

@@ -53,6 +53,8 @@ export default function EditorScreen() {
   panelWidthRef.current = panelWidth;
   // Fond transparent (damier) de CETTE toile — lu du meta au chargement.
   const [canvasTransparentBg, setCanvasTransparentBgState] = useState(false);
+  // Dimensions logiques de la toile chargée → auto-ajustement du canvas.
+  const [canvasContentSize, setCanvasContentSize] = useState<{ w: number; h: number } | null>(null);
   const [canvasLoaded, setCanvasLoaded] = useState(false);
   const [bottomExpanded, setBottomExpanded] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
@@ -101,12 +103,7 @@ export default function EditorScreen() {
         setCanvasTransparentBgState(data.meta.transparentBg === true);
         // Toile plus grande que la zone (mobile) : on l'ajuste d'emblée,
         // sinon une partie reste hors champ sans geste pour l'atteindre.
-        console.error('[fit] chargement: ref =', !!canvasRef.current, '| toile', data.meta.width, 'x', data.meta.height);
-        try {
-          canvasRef.current?.fitToContent(data.meta.width, data.meta.height);
-        } catch (e) {
-          console.error('[fit] ERREUR chargement:', e);
-        }
+        setCanvasContentSize({ w: data.meta.width, h: data.meta.height });
         lastCanvasDimsRef.current = { w: data.meta.width, h: data.meta.height };
       }
       setCanvasLoaded(true);
@@ -352,7 +349,7 @@ export default function EditorScreen() {
             backgroundColor: workspaceBg,
           }]}>
             <View style={styles.canvasContainer}>
-              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} transparentBg={canvasTransparentBg} />
+              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} transparentBg={canvasTransparentBg} contentSize={canvasContentSize ? { width: canvasContentSize.w, height: canvasContentSize.h } : undefined} />
             </View>
 
             {/* Zoom controls — the only way to zoom for mouse/trackpad users,
@@ -621,7 +618,7 @@ const styles = StyleSheet.create({
   },
   panelFloatBtn: {
     position: 'absolute',
-    bottom: BOTTOM_PANEL_HEIGHT + 12,
+    bottom: BOTTOM_PANEL_HEIGHT + 72,
     width: 42, height: 42, borderRadius: 21,
     borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',

@@ -29,6 +29,10 @@ interface Props {
   // global canvasBg : une photo importée avec transparence se voit sur un
   // damier même si le fond global est blanc.
   transparentBg?: boolean;
+  // Dimensions LOGIQUES de la toile : quand elles changent (nouvelle toile
+  // chargée), le canvas s'ajuste tout seul si elle dépasse la zone — sans
+  // dépendre d'un appel extérieur par ref (timing de montage non garanti).
+  contentSize?: { width: number; height: number };
 }
 
 // Imperative handle exposed via ref so parent screens (e.g. the editor's
@@ -95,7 +99,7 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
 }
 
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
-const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg }, ref) => {
+const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg, contentSize }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke,
     fillLayer, activeTool, activeLayerId, activeColor,
@@ -489,6 +493,28 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       { scale: scale.value },
     ],
   }));
+
+  // Auto-ajustement : nouvelle toile chargée (contentSize change) ET plus
+  // grande que la zone → zoom initial = tout voir. Une seule fois par toile
+  // (fittedKey) : le repli du panneau ou un zoom manuel ne re-déclenche pas.
+  const fittedKey = useRef('');
+  useEffect(() => {
+    if (!contentSize || width <= 0 || height <= 0) return;
+    const key = `${contentSize.width}x${contentSize.height}`;
+    if (fittedKey.current === key) return;
+    fittedKey.current = key;
+    const k = Math.min(width / contentSize.width, height / contentSize.height, 1);
+    if (k < 1) {
+      console.error('[fit] auto: zone', Math.round(width), 'x', Math.round(height), '| toile', contentSize.width, 'x', contentSize.height, '| k =', k.toFixed(3));
+      scale.value = k;
+      translateX.value = 0;
+      translateY.value = 0;
+      lastScale.current = k;
+      lastTranslateX.current = 0;
+      lastTranslateY.current = 0;
+      onZoomChangeRef.current?.(Math.round(k * 100));
+    }
+  }, [contentSize, width, height]);
 
   // Canvas background based on settings, overridden by the per-canvas
   // transparent flag (a transparent import shows the checker even when the

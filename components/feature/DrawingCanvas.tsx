@@ -101,7 +101,7 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
 const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg, contentSize }, ref) => {
   const {
-    layers, currentStroke, beginStroke, continueStroke, endStroke,
+    layers, currentStroke, beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
     fillLayer, activeTool, activeLayerId, activeColor,
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
@@ -122,10 +122,21 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   activeColorRef.current = activeColor;
 
   const beginStrokeRef = useRef(beginStroke);
+  const cancelStrokeRef = useRef(cancelStroke);
   const continueStrokeRef = useRef(continueStroke);
   const endStrokeRef = useRef(endStroke);
   const fillLayerRef = useRef(fillLayer);
   const beginLassoRef = useRef(beginLasso);
+  const cancelLassoRef = useRef(cancelLasso);
+  // Miroirs à jour pour les handlers figés du PanResponder (créé une fois) :
+  // la conversion et le facteur de taille lisent les refs, jamais les props
+  // capturées au premier rendu.
+  const contentSizeRef = useRef(contentSize);
+  contentSizeRef.current = contentSize;
+  const zoneRef = useRef({ w: width, h: height });
+  zoneRef.current = { w: width, h: height };
+  const paintScaleRef = useRef(1);
+  paintScaleRef.current = contentSize ? 1 / Math.max(0.0001, Math.min(zoneRef.current.w / contentSize.width, zoneRef.current.h / contentSize.height)) : 1;
   const continueLassoRef = useRef(continueLasso);
   const endLassoRef = useRef(endLasso);
   const moveSelectionRef = useRef(moveSelection);
@@ -133,10 +144,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const selectionRef = useRef(selection);
   const pickLayerAtRef = useRef(pickLayerAt);
   beginStrokeRef.current = beginStroke;
+  cancelStrokeRef.current = cancelStroke;
   continueStrokeRef.current = continueStroke;
   endStrokeRef.current = endStroke;
   fillLayerRef.current = fillLayer;
   beginLassoRef.current = beginLasso;
+  cancelLassoRef.current = cancelLasso;
   continueLassoRef.current = continueLasso;
   endLassoRef.current = endLasso;
   moveSelectionRef.current = moveSelection;
@@ -303,22 +316,27 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     };
   }
 
-  // Convert pageX/pageY (absolute screen) → canvas-space coordinates
-  // This correctly accounts for the container's on-screen position + zoom/pan
-  // transform + le facteur toile/zone (les traits vivent en coordonnées de la
-  // TOILE : l'export et les autres appareils voient exactement le dessin).
+  // Convert pageX/pageY (absolute screen) → coordonnées de la TOILE.
+  // Chaîne inverse exacte du rendu :
+  //   écran = pan/zoom (T + S×zone) ; zone = offset + k×toile (viewBox
+  //   « meet » : k uniforme = min(zone/toile), contenu centré).
   function toCanvasCoords(pageX: number, pageY: number) {
     const layout = containerLayout.current;
-    // Local coords relative to container
     const localX = layout ? pageX - layout.x : pageX;
     const localY = layout ? pageY - layout.y : pageY;
-    // Canvas coords = undo translate then undo scale, then zone → toile
-    const sx = contentSize ? contentSize.width / Math.max(1, width) : 1;
-    const sy = contentSize ? contentSize.height / Math.max(1, height) : 1;
-    return {
-      x: sx * (localX - lastTranslateX.current) / lastScale.current,
-      y: sy * (localY - lastTranslateY.current) / lastScale.current,
-    };
+    const zone = zoneRef.current;
+    const cs = contentSizeRef.current;
+    // 1) undo pan/zoom (transform en px de zone)
+    const vx = (localX - lastTranslateX.current) / lastScale.current;
+    const vy = (localY - lastTranslateY.current) / lastScale.current;
+    // 2) undo viewBox « meet » (k uniforme + centrage)
+    if (cs) {
+      const k = Math.min(zone.w / cs.width, zone.h / cs.height);
+      const offX = (zone.w - cs.width * k) / 2;
+      const offY = (zone.h - cs.height * k) / 2;
+      return { x: (vx - offX) / k, y: (vy - offY) / k };
+    }
+    return { x: vx, y: vy };
   }
 
   const panResponder = useRef(
@@ -332,8 +350,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         if (touches.length >= 2) {
           isPinching.current = true;
           isDrawing.current = false;
-          endStrokeRef.current();
-          endLassoRef.current();
+          // Un deuxième doigt = pinch/pan : le fragment tracé par le premier
+          // doigt est JETÉ (pas commité) — c'est une tentative de traçage.
+          cancelStrokeRef.current();
+          cancelLassoRef.current();
           pinchStartDistance.current = getDistance(touches);
           pinchStartScale.current = lastScale.current;
           const mid = getMidpointPage(touches);
@@ -378,7 +398,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
-        beginStrokeRef.current(c.x, c.y, paintScale);
+        beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
       },
 
       onPanResponderMove: (evt) => {
@@ -388,8 +408,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           if (!isPinching.current) {
             isPinching.current = true;
             isDrawing.current = false;
-            endStrokeRef.current();
-            endLassoRef.current();
+            cancelStrokeRef.current();
+            cancelLassoRef.current();
             pinchStartDistance.current = getDistance(touches);
             pinchStartScale.current = lastScale.current;
             const mid = getMidpointPage(touches);
@@ -514,10 +534,6 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const overlayColor = canvasBg === 'black' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
   const showGrid = settings.showGrid || canvasBg === 'grid';
   const showDots = canvasBg === 'dots';
-
-  // Facteur zone → toile pour l'épaisseur du pinceau ( même trait relatif
-  // de la toile, quelle que soit la taille de l'écran).
-  const paintScale = contentSize ? contentSize.width / Math.max(1, width) : 1;
 
   // Current stroke eraser indicator
   const currentEraserStroke = currentStroke && currentStroke.tool === 'eraser';

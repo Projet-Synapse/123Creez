@@ -85,6 +85,8 @@ interface CanvasContextType {
   commitSelection: () => Layer[] | null;
 
   beginStroke: (x: number, y: number, sizeScale?: number) => void;
+  cancelStroke: () => void;
+  cancelLasso: () => void;
   continueStroke: (x: number, y: number) => void;
   endStroke: () => void;
 
@@ -239,6 +241,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
 
   const continueStroke = useCallback((x: number, y: number) => {
     setCurrentStroke(prev => prev ? { ...prev, points: [...prev.points, { x, y }] } : null);
+  }, []);
+
+  // Jette le trait/lasso EN COURS sans le committer — utilisé quand un
+  // deuxième doigt transforme le geste en pinch/pan (le fragment tracé ne
+  // doit pas rester sur la toile).
+  const cancelStroke = useCallback(() => {
+    setCurrentStroke(null);
+  }, []);
+
+  const cancelLasso = useCallback(() => {
+    setCurrentLassoPoints([]);
   }, []);
 
   const endStroke = useCallback(() => {
@@ -491,7 +504,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       isDirty, canvasId, selection, currentLassoPoints,
       setActiveTool, setActiveColor, setBrushSize, setBrushOpacity,
       setActiveLayerId, setSelection, clearSelection, commitSelection,
-      beginStroke, continueStroke, endStroke,
+      beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
       beginLasso, continueLasso, endLasso,
       moveSelection,
       addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,

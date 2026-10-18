@@ -101,7 +101,12 @@ export default function EditorScreen() {
         setCanvasTransparentBgState(data.meta.transparentBg === true);
         // Toile plus grande que la zone (mobile) : on l'ajuste d'emblée,
         // sinon une partie reste hors champ sans geste pour l'atteindre.
-        canvasRef.current?.fitToContent(data.meta.width, data.meta.height);
+        console.error('[fit] chargement: ref =', !!canvasRef.current, '| toile', data.meta.width, 'x', data.meta.height);
+        try {
+          canvasRef.current?.fitToContent(data.meta.width, data.meta.height);
+        } catch (e) {
+          console.error('[fit] ERREUR chargement:', e);
+        }
         lastCanvasDimsRef.current = { w: data.meta.width, h: data.meta.height };
       }
       setCanvasLoaded(true);
@@ -376,6 +381,7 @@ export default function EditorScreen() {
                   // Ajuster : la toile entière dans la zone (après un repli
                   // de panneau, un zoom hasardeux, ou au retour au 100 %).
                   const d = lastCanvasDimsRef.current;
+                  console.error('[fit] bouton Ajuster: dims =', JSON.stringify(d), '| ref =', !!canvasRef.current);
                   if (d) canvasRef.current?.fitToContent(d.w, d.h);
                 }}
                 hitSlop={6}

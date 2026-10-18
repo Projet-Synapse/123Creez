@@ -279,6 +279,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         chargement d'une toile plus grande que l'écran (mobile). */
     fitToContent: (contentW: number, contentH: number) => {
       const k = Math.min(width / Math.max(1, contentW), height / Math.max(1, contentH), 1);
+      console.error('[fit] appelé: zone', Math.round(width), 'x', Math.round(height), '| toile', contentW, 'x', contentH, '| k =', k.toFixed(3));
       scale.value = k;
       translateX.value = 0;
       translateY.value = 0;

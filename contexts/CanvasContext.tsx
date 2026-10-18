@@ -84,7 +84,7 @@ interface CanvasContextType {
       was applied so callers can persist immediately, null otherwise. */
   commitSelection: () => Layer[] | null;
 
-  beginStroke: (x: number, y: number) => void;
+  beginStroke: (x: number, y: number, sizeScale?: number) => void;
   continueStroke: (x: number, y: number) => void;
   endStroke: () => void;
 
@@ -217,7 +217,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setCurrentLassoPoints([]);
   }, []);
 
-  const beginStroke = useCallback((x: number, y: number) => {
+  const beginStroke = useCallback((x: number, y: number, sizeScale = 1) => {
     if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick') return;
     // Painting while a lasso move is floating would render the new stroke
     // half-shifted — finalize the move first.
@@ -227,7 +227,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       id,
       points: [{ x, y }],
       color: activeTool === 'eraser' ? '#eraser' : activeColor,
-      size: brushSize,
+      // size en px de TOILE : l'écran passe un facteur (zone → toile) pour
+      // que le trait ait la même épaisseur relative sur tous les appareils.
+      size: Math.max(0.5, brushSize * sizeScale),
       opacity: brushOpacity,
       tool: activeTool,
       layerId: activeLayerId,

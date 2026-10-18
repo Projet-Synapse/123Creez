@@ -378,7 +378,6 @@ export default function EditorScreen() {
                   // Ajuster : la toile entière dans la zone (après un repli
                   // de panneau, un zoom hasardeux, ou au retour au 100 %).
                   const d = lastCanvasDimsRef.current;
-                  console.error('[fit] bouton Ajuster: dims =', JSON.stringify(d), '| ref =', !!canvasRef.current);
                   if (d) canvasRef.current?.fitToContent(d.w, d.h);
                 }}
                 hitSlop={6}

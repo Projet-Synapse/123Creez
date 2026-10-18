@@ -279,18 +279,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }
       }
     },
-    /** Ajuste la toile entière à la zone de travail (scale ≤ 1) — utilisé au
-        chargement d'une toile plus grande que l'écran (mobile). */
-    fitToContent: (contentW: number, contentH: number) => {
-      const k = Math.min(width / Math.max(1, contentW), height / Math.max(1, contentH), 1);
-      console.error('[fit] appelé: zone', Math.round(width), 'x', Math.round(height), '| toile', contentW, 'x', contentH, '| k =', k.toFixed(3));
-      scale.value = k;
-      translateX.value = 0;
-      translateY.value = 0;
-      lastScale.current = k;
-      lastTranslateX.current = 0;
-      lastTranslateY.current = 0;
-      onZoomChangeRef.current?.(Math.round(k * 100));
+    /** « Ajuster » : la toile entière est toujours visible à 100 % (viewBox
+        en coordonnées toile) — recale simplement la vue après un zoom. */
+    fitToContent: (_contentW: number, _contentH: number) => {
+      resetZoomInternal();
     },
     zoomIn: () => zoomBy(1.2, width / 2, height / 2),
     zoomOut: () => zoomBy(1 / 1.2, width / 2, height / 2),
@@ -312,16 +304,20 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   }
 
   // Convert pageX/pageY (absolute screen) → canvas-space coordinates
-  // This correctly accounts for the container's on-screen position + zoom/pan transform
+  // This correctly accounts for the container's on-screen position + zoom/pan
+  // transform + le facteur toile/zone (les traits vivent en coordonnées de la
+  // TOILE : l'export et les autres appareils voient exactement le dessin).
   function toCanvasCoords(pageX: number, pageY: number) {
     const layout = containerLayout.current;
     // Local coords relative to container
     const localX = layout ? pageX - layout.x : pageX;
     const localY = layout ? pageY - layout.y : pageY;
-    // Canvas coords = undo translate then undo scale
+    // Canvas coords = undo translate then undo scale, then zone → toile
+    const sx = contentSize ? contentSize.width / Math.max(1, width) : 1;
+    const sy = contentSize ? contentSize.height / Math.max(1, height) : 1;
     return {
-      x: (localX - lastTranslateX.current) / lastScale.current,
-      y: (localY - lastTranslateY.current) / lastScale.current,
+      x: sx * (localX - lastTranslateX.current) / lastScale.current,
+      y: sy * (localY - lastTranslateY.current) / lastScale.current,
     };
   }
 
@@ -382,7 +378,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
-        beginStrokeRef.current(c.x, c.y);
+        beginStrokeRef.current(c.x, c.y, paintScale);
       },
 
       onPanResponderMove: (evt) => {
@@ -494,27 +490,17 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     ],
   }));
 
-  // Auto-ajustement : nouvelle toile chargée (contentSize change) ET plus
-  // grande que la zone → zoom initial = tout voir. Une seule fois par toile
-  // (fittedKey) : le repli du panneau ou un zoom manuel ne re-déclenche pas.
+  // Nouvelle toile chargée : vue remise à 100 % — avec le viewBox en
+  // coordonnées toile, 100 %montre TOUJOURS la toile entière, quelle que
+  // soit la taille de l'écran (fini la toile coupée sur mobile).
   const fittedKey = useRef('');
   useEffect(() => {
     if (!contentSize || width <= 0 || height <= 0) return;
     const key = `${contentSize.width}x${contentSize.height}`;
     if (fittedKey.current === key) return;
     fittedKey.current = key;
-    const k = Math.min(width / contentSize.width, height / contentSize.height, 1);
-    if (k < 1) {
-      console.error('[fit] auto: zone', Math.round(width), 'x', Math.round(height), '| toile', contentSize.width, 'x', contentSize.height, '| k =', k.toFixed(3));
-      scale.value = k;
-      translateX.value = 0;
-      translateY.value = 0;
-      lastScale.current = k;
-      lastTranslateX.current = 0;
-      lastTranslateY.current = 0;
-      onZoomChangeRef.current?.(Math.round(k * 100));
-    }
-  }, [contentSize, width, height]);
+    resetZoomInternal();
+  }, [contentSize, width, height, resetZoomInternal]);
 
   // Canvas background based on settings, overridden by the per-canvas
   // transparent flag (a transparent import shows the checker even when the
@@ -528,6 +514,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const overlayColor = canvasBg === 'black' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
   const showGrid = settings.showGrid || canvasBg === 'grid';
   const showDots = canvasBg === 'dots';
+
+  // Facteur zone → toile pour l'épaisseur du pinceau ( même trait relatif
+  // de la toile, quelle que soit la taille de l'écran).
+  const paintScale = contentSize ? contentSize.width / Math.max(1, width) : 1;
 
   // Current stroke eraser indicator
   const currentEraserStroke = currentStroke && currentStroke.tool === 'eraser';
@@ -550,6 +540,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
   if (width <= 0 || height <= 0) return null;
 
+  // Coordonnées LOGIQUES = la toile (meta). Le viewBox du Svg mappe la toile
+  // entière dans la zone écran : sur mobile, une toile plus grande que
+  // l'écran est visible en entier et le dessin reste fidèle à l'export.
+  const contentW = contentSize?.width ?? width;
+  const contentH = contentSize?.height ?? height;
+
   return (
     <View
       ref={containerRef}
@@ -562,27 +558,33 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       {...panResponder.panHandlers}
     >
       <Animated.View style={[{ width, height }, animatedStyle]}>
-        <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+        <Svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${contentW} ${contentH}`}
+          preserveAspectRatio="xMidYMid meet"
+          style={StyleSheet.absoluteFill}
+        >
           {/* Background */}
           {transparentBg === true
-            ? (!hideCheckerForCapture && <CheckerBg width={width} height={height} />)
+            ? (!hideCheckerForCapture && <CheckerBg width={contentW} height={contentH} />)
             : (isTransparent
-              ? <CheckerBg width={width} height={height} />
-              : <Rect x={0} y={0} width={width} height={height} fill={bgColor} />)
+              ? <CheckerBg width={contentW} height={contentH} />
+              : <Rect x={0} y={0} width={contentW} height={contentH} fill={bgColor} />)
           }
 
           {/* Grid / Dots overlay */}
-          {showGrid && <GridOverlay width={width} height={height} color={overlayColor} />}
-          {showDots && <DotsOverlay width={width} height={height} color={overlayColor} />}
+          {showGrid && <GridOverlay width={contentW} height={contentH} color={overlayColor} />}
+          {showDots && <DotsOverlay width={contentW} height={contentH} color={overlayColor} />}
 
           {/* Selection masks (outside = keep in place, inside = moves) */}
           {selection && (
             <Defs>
-              <Mask id={`${selMaskBase}-out`} x="0" y="0" width={width} height={height}>
+              <Mask id={`${selMaskBase}-out`} x="0" y="0" width={contentW} height={contentH}>
                 <Rect x={0} y={0} width={width} height={height} fill="white" />
                 <Polygon points={basePolygonPoints} fill="black" />
               </Mask>
-              <Mask id={`${selMaskBase}-in`} x="0" y="0" width={width} height={height}>
+              <Mask id={`${selMaskBase}-in`} x="0" y="0" width={contentW} height={contentH}>
                 <Rect x={0} y={0} width={width} height={height} fill="black" />
                 <Polygon points={selPolygonPoints} fill="white" />
               </Mask>
@@ -597,8 +599,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
                 <CanvasArt
                   key={layer.id}
                   layers={[layer]}
-                  width={width}
-                  height={height}
+                  width={contentW}
+                  height={contentH}
                   variant={layer.id}
                 />
               );
@@ -607,15 +609,15 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
               <G key={layer.id}>
                 <CanvasArt
                   layers={[layer]}
-                  width={width}
-                  height={height}
+                  width={contentW}
+                  height={contentH}
                   variant={`${layer.id}-out`}
                   maskId={`${selMaskBase}-out`}
                 />
                 <CanvasArt
                   layers={[layer]}
-                  width={width}
-                  height={height}
+                  width={contentW}
+                  height={contentH}
                   variant={`${layer.id}-in`}
                   includeFill={false}
                   maskId={`${selMaskBase}-in`}

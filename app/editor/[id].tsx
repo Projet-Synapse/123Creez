@@ -41,7 +41,7 @@ export default function EditorScreen() {
     brushOpacity, activeTool, activeColor, clearSelection, commitSelection,
     selection,
   } = useCanvas();
-  const { loadCanvasData, persistCanvas, canvases, setCanvasTransparentBg } = useVault();
+  const { loadCanvasData, persistCanvas, canvases, setCanvasTransparentBg, addCanvasDrawingTime } = useVault();
   const { runTrigger, recording } = useAutomation();
 
   const [showLayers, setShowLayers] = useState(false);
@@ -55,6 +55,11 @@ export default function EditorScreen() {
   const [canvasTransparentBg, setCanvasTransparentBgState] = useState(false);
   // Dimensions logiques de la toile chargée → auto-ajustement du canvas.
   const [canvasContentSize, setCanvasContentSize] = useState<{ w: number; h: number } | null>(null);
+  // Plein écran de dessin : masque top bar, toolbar, panneaux — la toile
+  // occupe tout ; le bouton flottant plein-écran sert de va-et-vient.
+  const [fullDraw, setFullDraw] = useState(false);
+  // Temps de dessin : compteur seconde par seconde, flushé périodiquement.
+  const drawingSecondsRef = useRef(0);
   const [canvasLoaded, setCanvasLoaded] = useState(false);
   const [bottomExpanded, setBottomExpanded] = useState(false);
   const [zoomPct, setZoomPct] = useState(100);
@@ -83,7 +88,8 @@ export default function EditorScreen() {
     setCanvasTransparentBg(id, next);
   }, [id, canvasTransparentBg, setCanvasTransparentBg]);
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
-  const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom - TOPBAR_HEIGHT - BOTTOM_PANEL_HEIGHT;
+  const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom
+    - (fullDraw ? 0 : TOPBAR_HEIGHT) - (fullDraw ? 0 : BOTTOM_PANEL_HEIGHT);
   // Honor the "Position de la barre d'outils" setting — the bar docks to the
   // chosen side of the workspace.
   const toolbarRight = settings.toolbarPosition === 'right';
@@ -129,6 +135,23 @@ export default function EditorScreen() {
     await persistCanvas(id, committed ?? layers, activeLayerId, layerGroups);
     markClean();
   }, [id, isDirty, layers, activeLayerId, persistCanvas, markClean, commitSelection]);
+
+  // Temps de dessin : +1 s/seconde (l'écran ouvert = on œuvre), flush au
+  // vault toutes les 30 s et au démontage.
+  useEffect(() => {
+    if (!id) return;
+    const timer = setInterval(() => {
+      drawingSecondsRef.current += 1;
+      if (drawingSecondsRef.current >= 30) {
+        addCanvasDrawingTime(id, drawingSecondsRef.current);
+        drawingSecondsRef.current = 0;
+      }
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+      if (drawingSecondsRef.current > 0) addCanvasDrawingTime(id, drawingSecondsRef.current);
+    };
+  }, [id, addCanvasDrawingTime]);
 
   useEffect(() => {
     const interval = settings.autoSaveInterval;
@@ -315,19 +338,21 @@ export default function EditorScreen() {
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom, backgroundColor: theme.bg }]}>
       <StatusBar style={theme.statusBarStyle} />
 
-      <EditorTopBar
-        canvasName={canvasName}
-        isDirty={isDirty}
-        onBack={handleBack}
-        onSave={handleSave}
-        onExport={handleExport}
-        onHelp={() => setShowShortcuts(true)}
-        transparentBg={canvasTransparentBg}
-        onToggleTransparentBg={toggleTransparentBg}
-      />
+      {!fullDraw && (
+        <EditorTopBar
+          canvasName={canvasName}
+          isDirty={isDirty}
+          onBack={handleBack}
+          onSave={handleSave}
+          onExport={handleExport}
+          onHelp={() => setShowShortcuts(true)}
+          transparentBg={canvasTransparentBg}
+          onToggleTransparentBg={toggleTransparentBg}
+        />
+      )}
 
       <View style={styles.workspace}>
-        {!toolbarRight && (
+        {!fullDraw && !toolbarRight && (
           <ToolBar
             onUndo={undo}
             onRedo={redo}
@@ -338,6 +363,7 @@ export default function EditorScreen() {
             canUndo={history.length > 0 || !!selection}
             canRedo={redoStack.length > 0}
             position="left"
+          popupMode={settings.toolbarMode ?? 'bar'}
           />
         )}
 
@@ -388,8 +414,8 @@ export default function EditorScreen() {
             </View>
           </View>
 
-          {/* Bottom brush panel */}
-          <RNAnimated.View style={[styles.bottomPanel, {
+          {/* Bottom brush panel (masqué en plein écran) */}
+          {!fullDraw && <RNAnimated.View style={[styles.bottomPanel, {
             height: expandedBottomHeight,
             backgroundColor: theme.panelBg,
             borderTopColor: theme.surfaceBorder,
@@ -545,7 +571,7 @@ export default function EditorScreen() {
                 </View>
               </View>
             )}
-          </RNAnimated.View>
+          </RNAnimated.View>}
         </View>
 
         {panelVisible && (
@@ -566,6 +592,24 @@ export default function EditorScreen() {
           width={panelWidth}
         />
 
+        {/* Plein écran de dessin : masque barres et panneaux d'un tap. */}
+        <Pressable
+          style={({ pressed }) => [styles.fullscreenBtn, {
+            right: panelVisible && !fullDraw ? panelWidth + 12 : 12,
+            backgroundColor: theme.panelBg,
+            borderColor: theme.surfaceBorder,
+          }, pressed && { opacity: 0.7 }]}
+          onPress={() => setFullDraw(v => !v)}
+          hitSlop={4}
+          accessibilityLabel="Plein écran de dessin"
+        >
+          <MaterialCommunityIcons
+            name={fullDraw ? 'fullscreen-exit' : 'fullscreen'}
+            size={20}
+            color={fullDraw ? theme.accent : theme.textSecondary}
+          />
+        </Pressable>
+
         {/* Replier/déplier le panneau depuis la zone de dessin — accessible
             sans viser la barre d'outils quand on dessine. */}
         <Pressable
@@ -585,7 +629,7 @@ export default function EditorScreen() {
           />
         </Pressable>
 
-        {toolbarRight && (
+        {toolbarRight && !fullDraw && (
           <ToolBar
             onUndo={undo}
             onRedo={redo}
@@ -596,6 +640,7 @@ export default function EditorScreen() {
             canUndo={history.length > 0 || !!selection}
             canRedo={redoStack.length > 0}
             position="right"
+          popupMode={settings.toolbarMode ?? 'bar'}
           />
         )}
       </View>
@@ -658,6 +703,14 @@ const styles = StyleSheet.create({
   canvasContainer: {
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5, shadowRadius: 16, elevation: 12,
+  },
+  fullscreenBtn: {
+    position: 'absolute',
+    top: 8,
+    width: 42, height: 42, borderRadius: 21,
+    borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+    zIndex: 30,
   },
   panelFloatBtn: {
     position: 'absolute',

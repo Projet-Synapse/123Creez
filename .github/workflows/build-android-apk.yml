@@ -120,6 +120,21 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk 123Creez.apk
           ls -lh 123Creez.apk
 
+      # APK DEBUG pour le développement avec Metro (hot-reload) : sans bundle
+      # embarqué, il charge le JS depuis `expo start --dev-client` sur le PC.
+      # Même signature (notre keystore) → installable par-dessus la release.
+      - name: Construire l'APK debug (dev Metro)
+        working-directory: android
+        timeout-minutes: 30
+        run: ./gradlew --build-cache assembleDebug -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
+
+      - name: Publier l'APK debug comme artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 123Creez-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
       - name: Publier l'APK comme artefact de ce run
         uses: actions/upload-artifact@v4
         with:

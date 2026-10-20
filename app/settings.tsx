@@ -293,6 +293,22 @@ export default function SettingsScreen() {
 
               <SectionTitle label="Lissage" theme={theme} />
               <Card theme={theme}>
+                <Divider theme={theme} />
+                <ToggleRow label="Annuler : tap à 2 doigts" value={settings.undoTwoFingerTap ?? true} onToggle={v => updateSettings({ undoTwoFingerTap: v })} theme={theme} />
+                <ToggleRow label="Rétablir : tap à 3 doigts" value={settings.redoThreeFingerTap ?? true} onToggle={v => updateSettings({ redoThreeFingerTap: v })} theme={theme} />
+                <Text style={styles.stabilizerLabel}>Sélection d’outils</Text>
+                <View style={styles.historyRow}>
+                  {(['bar', 'popup'] as const).map(mode => (
+                    <Pressable
+                      key={mode}
+                      style={[styles.historyBtn, (settings.toolbarMode ?? 'bar') === mode && { backgroundColor: theme.accent, borderColor: theme.accent }]}
+                      onPress={() => updateSettings({ toolbarMode: mode })}
+                    >
+                      <Text style={[styles.historyText, (settings.toolbarMode ?? 'bar') === mode && { color: '#0d0d0d' }]}>{mode === 'bar' ? 'Barre' : 'Popup'}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+
                 <View style={styles.stabilizerRow}>
                   <Text style={styles.stabilizerLabel}>Stabilisateur du tracé</Text>
                   <Slider

@@ -103,6 +103,7 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
 const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg, contentSize }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
+    undo, redo,
     fillLayer, activeTool, activeLayerId, activeColor,
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
@@ -130,6 +131,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const fillLayerRef = useRef(fillLayer);
   const beginLassoRef = useRef(beginLasso);
   const cancelLassoRef = useRef(cancelLasso);
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  const redoRef = useRef(redo);
+  redoRef.current = redo;
+  // Tap multi-doigts = gestes d'annulation (style IbisPaint) : 2 doigts =
+  // annuler, 3 doigts = rétablir — un TAP (court, sans mouvement du milieu),
+  // sinon c'est un pinch/pan et rien ne se déclenche.
+  const gestureInfo = useRef({ start: 0, maxTouches: 0, midStart: null as { x: number; y: number } | null, midMoved: 0 });
   const addShapeRef = useRef(addShape);
   addShapeRef.current = addShape;
   const addTextRef = useRef(addText);
@@ -363,6 +372,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       onPanResponderGrant: (evt) => {
         const touches = evt.nativeEvent.touches;
 
+        gestureInfo.current = {
+          start: Date.now(),
+          maxTouches: touches.length,
+          midStart: touches.length >= 2 ? getMidpointPage(touches) : null,
+          midMoved: 0,
+        };
+
         if (touches.length >= 2) {
           isPinching.current = true;
           isDrawing.current = false;
@@ -475,6 +491,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const touches = evt.nativeEvent.touches;
 
         if (touches.length >= 2) {
+          const g = gestureInfo.current;
+          g.maxTouches = Math.max(g.maxTouches, touches.length);
+          if (g.midStart) {
+            const mid = getMidpointPage(touches);
+            g.midMoved = Math.max(g.midMoved, Math.hypot(mid.x - g.midStart.x, mid.y - g.midStart.y));
+          }
           if (!isPinching.current) {
             isPinching.current = true;
             isDrawing.current = false;
@@ -599,8 +621,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       },
 
       onPanResponderRelease: () => {
+        // Tap multi-doigts (court, immobile) : 2 doigts annulent, 3 rétablissent.
+        const g = gestureInfo.current;
+        const dur = Date.now() - g.start;
+        const isMultiTap = g.maxTouches >= 2 && dur < 350 && g.midMoved < 12;
         if (isPinching.current) {
           isPinching.current = false;
+          if (isMultiTap) {
+            if (g.maxTouches === 2 && settingsRef.current.undoTwoFingerTap) undoRef.current();
+            if (g.maxTouches >= 3 && settingsRef.current.redoThreeFingerTap) redoRef.current();
+          }
           return;
         }
         isDrawing.current = false;

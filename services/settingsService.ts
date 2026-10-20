@@ -24,6 +24,11 @@ export interface AppSettings {
   strokeStabilizer: number;
   /** Forme de l'outil Formes (ligne / rectangle / ellipse). */
   shapeKind: 'line' | 'rect' | 'ellipse';
+  /** Gestes de la zone de dessin (style IbisPaint). */
+  undoTwoFingerTap: boolean;
+  redoThreeFingerTap: boolean;
+  /** Sélection d'outils : barre latérale fixe ou popup repliable. */
+  toolbarMode: 'bar' | 'popup';
   gyroCorrection: boolean;
   // Interface
   showLayerInfo: boolean;
@@ -69,6 +74,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pressureCurve: 'linear',
   strokeStabilizer: 0,
   shapeKind: 'line',
+  undoTwoFingerTap: true,
+  redoThreeFingerTap: true,
+  toolbarMode: 'bar',
   gyroCorrection: false,
   // Interface
   showLayerInfo: true,

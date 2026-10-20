@@ -23,6 +23,8 @@ export interface CanvasMeta {
   /** Fond transparent : l'arrière-plan (éditeur, vignette, export PNG) est
       traité comme transparent — représenté par un damier gris à l'écran. */
   transparentBg?: boolean;
+  /** Temps de dessin cumulé (secondes), affiché dans la galerie. */
+  drawingTime?: number;
 }
 
 export interface CanvasData {
@@ -137,6 +139,29 @@ export async function setCanvasThumbnail(id: string, thumbnail: string): Promise
   meta.thumbnail = thumbnail;
   meta.thumbAt = Date.now();
   await saveCanvasMetas(metas);
+}
+
+/** Cumule le temps de dessin (secondes) d'une toile — meta + data. */
+export async function addCanvasDrawingTime(id: string, seconds: number): Promise<void> {
+  const metas = await getCanvasMetas();
+  const meta = metas.find(m => m.id === id);
+  if (!meta) return;
+  meta.drawingTime = (meta.drawingTime ?? 0) + seconds;
+  await saveCanvasMetas(metas);
+  const data = await loadCanvas(id);
+  if (data) {
+    data.meta.drawingTime = meta.drawingTime;
+    await AsyncStorage.setItem(KEYS.CANVAS_DATA(id), JSON.stringify(data));
+  }
+}
+
+/** « 1 h 05 », « 12 min », « 40 s » — affichage galerie. */
+export function formatDrawingTime(seconds?: number): string {
+  if (!seconds || seconds < 60) return `${Math.floor(seconds ?? 0)} s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return m ? `${h} h ${String(m).padStart(2, '0')}` : `${h} h`;
 }
 
 /** Bascule le fond transparent (damier) d'une toile — meta + data. */

@@ -1,6 +1,6 @@
 // Powered by OnSpace.AI
-import React from 'react';
-import { View, StyleSheet, Pressable, Text, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, Pressable, Text, ScrollView, Modal } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
@@ -40,14 +40,106 @@ interface ToolBarProps {
   /** Which side of the workspace the bar is docked to — drives the border
       side and mirrors the layout order in the editor. */
   position?: 'left' | 'right';
+  /** 'popup' : les outils s'ouvrent en fenêtre (la barre ne garde que les
+      actions) ; 'bar' : colonne d'outils permanente (défaut). */
+  popupMode?: 'bar' | 'popup';
+}
+
+
+// Popup de sélection d'outils (mode popup) : grille 2 colonnes, se ferme au
+// choix — inspirée de la « Tool Select Popup » d'IbisPaint.
+function ToolPopup({ visible, onClose, theme }: { visible: boolean; onClose: () => void; theme: any }) {
+  const { activeTool, setActiveTool } = useCanvas();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' }} onPress={onClose}>
+        <Pressable
+          style={{ backgroundColor: theme.panelBg, borderWidth: 1, borderColor: theme.surfaceBorder, borderRadius: 16, padding: 10, flexDirection: 'row', flexWrap: 'wrap', maxWidth: 260, gap: 6 }}
+          onStartShouldSetResponder={() => true}
+        >
+          {TOOLS.map(tool => {
+            const isActive = activeTool === tool.id;
+            return (
+              <Pressable
+                key={tool.id}
+                style={{
+                  width: 108, paddingVertical: 10, borderRadius: 12, alignItems: 'center', gap: 3,
+                  backgroundColor: isActive ? theme.activeGlow : theme.surfaceHigh,
+                  borderWidth: 1, borderColor: isActive ? theme.accent : theme.surfaceBorder,
+                }}
+                onPress={() => { setActiveTool(tool.id); onClose(); }}
+              >
+                <MaterialCommunityIcons name={tool.icon as any} size={20} color={isActive ? theme.accent : theme.textSecondary} />
+                <Text style={{ fontSize: 11, fontWeight: '600', color: isActive ? theme.accent : theme.textSecondary }}>{tool.label}</Text>
+              </Pressable>
+            );
+          })}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
 }
 
 const ToolBar: React.FC<ToolBarProps> = ({
-  onUndo, onRedo, onClear, onLayersToggle, onPanelToggle, panelVisible, canUndo, canRedo, position = 'left'
+  onUndo, onRedo, onClear, onLayersToggle, onPanelToggle, panelVisible, canUndo, canRedo, position = 'left', popupMode = 'bar'
 }) => {
   const { activeTool, setActiveTool, selection, clearSelection } = useCanvas();
   const { theme } = useTheme();
   const isRight = position === 'right';
+  const [popupOpen, setPopupOpen] = useState(false);
+  const activeToolMeta = TOOLS.find(t => t.id === activeTool);
+
+  if (popupMode === 'popup') {
+    return (
+      <>
+        <View style={[
+          styles.container,
+          { backgroundColor: theme.panelBg },
+          isRight
+            ? { borderLeftWidth: 1, borderLeftColor: theme.surfaceBorder }
+            : { borderRightWidth: 1, borderRightColor: theme.surfaceBorder },
+        ]}>
+          {/* Undo / Redo */}
+          <View style={styles.actionGroup}>
+            <Pressable style={({ pressed }) => [styles.actionBtn, !canUndo && styles.disabled, pressed && styles.pressed]} onPress={onUndo} disabled={!canUndo} hitSlop={8}>
+              <MaterialCommunityIcons name="undo" size={20} color={canUndo ? theme.textPrimary : theme.textMuted} />
+            </Pressable>
+            <Pressable style={({ pressed }) => [styles.actionBtn, !canRedo && styles.disabled, pressed && styles.pressed]} onPress={onRedo} disabled={!canRedo} hitSlop={8}>
+              <MaterialCommunityIcons name="redo" size={20} color={canRedo ? theme.textPrimary : theme.textMuted} />
+            </Pressable>
+          </View>
+
+          <View style={[styles.divider, { backgroundColor: theme.surfaceBorder }]} />
+
+          {/* Bouton outils (ouvre la popup) */}
+          <View style={styles.toolScroll}>
+            <Pressable
+              style={({ pressed }) => [styles.toolBtn, activeToolMeta && [styles.toolBtnActive, { backgroundColor: theme.activeGlow }], pressed && styles.pressed]}
+              onPress={() => setPopupOpen(true)}
+              hitSlop={4}
+              accessibilityLabel="Choisir l'outil"
+            >
+              <MaterialCommunityIcons name="palette" size={20} color={activeToolMeta ? theme.accent : theme.textSecondary} />
+              <Text style={[styles.toolLabel, { color: activeToolMeta ? theme.accent : theme.textMuted }]}>
+                {activeToolMeta ? activeToolMeta.label : 'Outils'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={[styles.divider, { backgroundColor: theme.surfaceBorder }]} />
+
+          {/* Calques (le repli du panneau reste sur le bouton flottant) */}
+          <View style={styles.actionGroup}>
+            <Pressable style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]} onPress={onLayersToggle} hitSlop={8}>
+              <MaterialCommunityIcons name="layers" size={20} color={theme.textSecondary} />
+            </Pressable>
+          </View>
+
+          <ToolPopup visible={popupOpen} onClose={() => setPopupOpen(false)} theme={theme} />
+        </View>
+      </>
+    );
+  }
 
   return (
     <View style={[

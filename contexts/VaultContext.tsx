@@ -9,7 +9,7 @@ import {
   saveFolder, deleteFolder, setCanvasThumbnail as persistThumbnail,
   setCanvasOrder as persistCanvasOrder, setFoldersOrder as persistFoldersOrder,
   setFolderPreviewMode as persistFolderPreviewMode,
-  loadCanvas, createDefaultCanvas, generateId, setCanvasTransparentBg,
+  loadCanvas, createDefaultCanvas, generateId, setCanvasTransparentBg, addCanvasDrawingTime,
   computeThumbnailColor, computeStrokeCount,
 } from '@/services/vaultService';
 import { Layer, LayerGroup } from '@/contexts/CanvasContext';
@@ -33,6 +33,8 @@ interface VaultContextType {
   setCanvasTransparentBg: (id: string, value: boolean) => Promise<void>;
   moveCanvas: (id: string, folderId: string | null) => Promise<void>;
   duplicateCanvas: (id: string) => Promise<string>;
+  /** Cumule le temps de dessin (secondes) de la toile (galerie). */
+  addCanvasDrawingTime: (id: string, seconds: number) => Promise<void>;
 
   createFolder: (name: string, color?: string) => Promise<Folder>;
   renameFolder: (id: string, name: string) => Promise<void>;
@@ -96,6 +98,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const renameCanvasFn = useCallback(async (id: string, name: string) => {
     await renameCanvas(id, name);
     setCanvases(prev => prev.map(c => c.id === id ? { ...c, name, updatedAt: Date.now() } : c));
+  }, []);
+
+  const setCanvasDrawingTimeFn = useCallback(async (id: string, seconds: number) => {
+    await addCanvasDrawingTime(id, seconds);
+    setCanvases(prev => prev.map(c => c.id === id ? { ...c, drawingTime: (c.drawingTime ?? 0) + seconds } : c));
   }, []);
 
   const setCanvasTransparentBgFn = useCallback(async (id: string, value: boolean) => {
@@ -286,6 +293,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     <VaultContext.Provider value={{
       canvases, folders, loading,
       createCanvas, removeCanvas, renameCanvas: renameCanvasFn, moveCanvas, duplicateCanvas,
+      addCanvasDrawingTime: setCanvasDrawingTimeFn,
       setCanvasTransparentBg: setCanvasTransparentBgFn,
       createFolder, renameFolder, removeFolder, createImageCanvas,
       reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,

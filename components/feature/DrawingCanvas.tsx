@@ -2,9 +2,10 @@
 import React, { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import {
   View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
+  Modal, TextInput, Pressable,
 } from 'react-native';
 import Svg, {
-  Rect, Line, Circle, Defs, Mask, Polyline, Polygon, G, Path,
+  Rect, Line, Circle, Ellipse, Defs, Mask, Polyline, Polygon, G, Path,
 } from 'react-native-svg';
 import Animated, {
   useAnimatedStyle, useSharedValue,
@@ -106,6 +107,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
     moveSelection, snapshotHistory, pickLayerAt,
+    addShape, addText, transformLayerImage, eyedropColor, setActiveColor,
   } = useCanvas();
   const { settings } = useTheme();
 
@@ -128,6 +130,20 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const fillLayerRef = useRef(fillLayer);
   const beginLassoRef = useRef(beginLasso);
   const cancelLassoRef = useRef(cancelLasso);
+  const addShapeRef = useRef(addShape);
+  addShapeRef.current = addShape;
+  const addTextRef = useRef(addText);
+  addTextRef.current = addText;
+  const transformLayerImageRef = useRef(transformLayerImage);
+  transformLayerImageRef.current = transformLayerImage;
+  const eyedropColorRef = useRef(eyedropColor);
+  eyedropColorRef.current = eyedropColor;
+  const setActiveColorRef = useRef(setActiveColor);
+  setActiveColorRef.current = setActiveColor;
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   // Miroirs à jour pour les handlers figés du PanResponder (créé une fois) :
   // la conversion et le facteur de taille lisent les refs, jamais les props
   // capturées au premier rendu.
@@ -368,6 +384,60 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
 
+        if (tool === 'eyedropper') {
+          const c = toCanvasCoords(pageX, pageY);
+          const col = eyedropColorRef.current(c.x, c.y);
+          if (col) setActiveColorRef.current(col);
+          return;
+        }
+
+        if (tool === 'text') {
+          const c = toCanvasCoords(pageX, pageY);
+          setTextModal({ visible: true, x: c.x, y: c.y, value: '' });
+          return;
+        }
+
+        if (tool === 'transform') {
+          const c = toCanvasCoords(pageX, pageY);
+          const layer = (layersRef.current ?? []).find(l => l.id === activeLayerIdRef.current);
+          const img = layer?.images?.[0];
+          if (!img) return;
+          const k = Math.min(zoneRef.current.w / img.width, 1e9);
+          const tol = 18 / Math.max(0.0001, Math.min(zoneRef.current.w / (contentSizeRef.current?.width ?? zoneRef.current.w), 1));
+          const handleBr = Math.hypot(c.x - (img.x + img.width), c.y - (img.y + img.height));
+          const handleTr = Math.hypot(c.x - (img.x + img.width), c.y - img.y);
+          if (handleBr <= tol + 8) {
+            transformMode.current = { mode: 'resize', startX: c.x, startY: c.y, orig: { x: img.x, y: img.y, w: img.width, h: img.height, angle: img.angle ?? 0 }, snapshotted: false };
+            setTransformSel(0);
+          } else if (handleTr <= tol + 8) {
+            transformMode.current = { mode: 'rotate', startX: c.x, startY: c.y, orig: { x: img.x, y: img.y, w: img.width, h: img.height, angle: img.angle ?? 0 }, snapshotted: false };
+            setTransformSel(0);
+          } else if (c.x >= img.x - tol && c.x <= img.x + img.width + tol && c.y >= img.y - tol && c.y <= img.y + img.height + tol) {
+            transformMode.current = { mode: 'move', startX: c.x, startY: c.y, orig: { x: img.x, y: img.y, w: img.width, h: img.height, angle: img.angle ?? 0 }, snapshotted: false };
+            setTransformSel(0);
+          } else {
+            setTransformSel(null);
+            transformMode.current = null;
+          }
+          return;
+        }
+
+        if (tool === 'shape') {
+          isDrawing.current = true;
+          const c = toCanvasCoords(pageX, pageY);
+          shapeStartRef.current = c;
+          setShapePreview({ kind: (settingsRef.current.shapeKind ?? 'line') as 'line' | 'rect' | 'ellipse', x: c.x, y: c.y, w: 0, h: 0 });
+          return;
+        }
+
+        if (tool === 'rectselect') {
+          isDrawing.current = true;
+          const c = toCanvasCoords(pageX, pageY);
+          rectStartRef.current = c;
+          beginLassoRef.current(c.x, c.y);
+          return;
+        }
+
         if (tool === 'fill') {
           fillLayerRef.current(activeLayerIdRef.current, activeColorRef.current);
           return;
@@ -445,6 +515,57 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
 
+        if (tool === 'rectselect' && rectStartRef.current) {
+          // Rectangle de sélection : 4 coins mis à jour en continu.
+          const c = toCanvasCoords(pageX, pageY);
+          const st = rectStartRef.current;
+          continueLassoRef.current(st.x, st.y);
+          continueLassoRef.current(c.x, st.y);
+          continueLassoRef.current(c.x, c.y);
+          continueLassoRef.current(st.x, c.y);
+          return;
+        }
+
+        if (tool === 'shape' && shapeStartRef.current) {
+          const c = toCanvasCoords(pageX, pageY);
+          const st = shapeStartRef.current;
+          setShapePreview({ kind: shapePreview?.kind ?? 'line', x: st.x, y: st.y, w: c.x - st.x, h: c.y - st.y });
+          return;
+        }
+
+        if (tool === 'transform' && transformMode.current) {
+          const tm = transformMode.current;
+          const c = toCanvasCoords(pageX, pageY);
+          const active = layersRef.current?.find(l => l.id === activeLayerIdRef.current);
+          const img = active?.images?.[0];
+          if (!img) return;
+          if (!tm.snapshotted) {
+            snapshotHistoryRef.current();
+            tm.snapshotted = true;
+          }
+          if (tm.mode === 'move') {
+            transformLayerImageRef.current(activeLayerIdRef.current, 0, {
+              x: tm.orig.x + (c.x - tm.startX),
+              y: tm.orig.y + (c.y - tm.startY),
+            });
+          } else if (tm.mode === 'resize') {
+            transformLayerImageRef.current(activeLayerIdRef.current, 0, {
+              width: Math.max(24, tm.orig.w + (c.x - tm.startX)),
+              height: Math.max(24, tm.orig.h + (c.y - tm.startY)),
+            });
+          } else {
+            const cx = tm.orig.x + tm.orig.w / 2;
+            const cy = tm.orig.y + tm.orig.h / 2;
+            const a0 = Math.atan2(tm.startY - cy, tm.startX - cx);
+            const a1 = Math.atan2(c.y - cy, c.x - cx);
+            const deg = (a1 - a0) * 180 / Math.PI;
+            transformLayerImageRef.current(activeLayerIdRef.current, 0, {
+              angle: Math.round(((tm.orig.angle + deg) % 360 + 540) % 360 - 180),
+            });
+          }
+          return;
+        }
+
         if (tool === 'fill' || tool === 'pick') return;
 
         if (tool === 'lasso') {
@@ -486,6 +607,29 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const tool = activeToolRef.current;
         if (tool === 'lasso') {
           endLassoRef.current();
+          return;
+        }
+        if (tool === 'rectselect') {
+          // Le pipeline lasso (points en rectangle) se termine pareil.
+          endLassoRef.current();
+          rectStartRef.current = null;
+          return;
+        }
+        if (tool === 'shape') {
+          const p = shapePreview;
+          const st = shapeStartRef.current;
+          if (p && st) {
+            const kind = (settingsRef.current.shapeKind ?? 'line') as 'line' | 'rect' | 'ellipse';
+            if (Math.abs(p.w) > 2 || Math.abs(p.h) > 2) {
+              addShapeRef.current(kind, kind === 'line' ? p.x : Math.min(p.x, p.x + p.w), kind === 'line' ? p.y : Math.min(p.y, p.y + p.h), p.w, p.h);
+            }
+          }
+          setShapePreview(null);
+          shapeStartRef.current = null;
+          return;
+        }
+        if (tool === 'transform') {
+          transformMode.current = null;
           return;
         }
         if (tool !== 'fill' && tool !== 'move') {
@@ -530,6 +674,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // Pendant une capture (export), le damier est masqué : le PNG garde une
   // transparence réelle au lieu de figer la représentation à l'écran.
   const [hideCheckerForCapture, setHideCheckerForCapture] = useState(false);
+  // Outil Formes : fantôme de la forme en cours de tracé (coords toile).
+  const [shapePreview, setShapePreview] = useState<{ kind: 'line' | 'rect' | 'ellipse'; x: number; y: number; w: number; h: number } | null>(null);
+  const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Outil Rect : départ du rectangle de sélection.
+  const rectStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Outil Texte : modale de saisie à la position du tap.
+  const [textModal, setTextModal] = useState<{ visible: boolean; x: number; y: number; value: string }>({ visible: false, x: 0, y: 0, value: '' });
+  // Outil Transformer : image du calque actif sélectionnée + mode de poignée.
+  const [transformSel, setTransformSel] = useState<number | null>(null);
+  const transformMode = useRef<{ mode: 'move' | 'resize' | 'rotate'; startX: number; startY: number; orig: { x: number; y: number; w: number; h: number; angle: number }; snapshotted: boolean } | null>(null);
   const bgColor = canvasBg === 'black' ? '#000000' : '#ffffff';
   const overlayColor = canvasBg === 'black' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
   const showGrid = settings.showGrid || canvasBg === 'grid';
@@ -606,6 +760,38 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
               </Mask>
             </Defs>
           )}
+
+          {/* Fantôme de l'outil Formes (contour pointillé). */}
+          {shapePreview && (() => {
+            const p = shapePreview;
+            const common = { stroke: activeColorRef.current, strokeWidth: Math.max(1.5, 2 / Math.max(0.0001, Math.min(width / (contentSizeRef.current?.width ?? width), height / (contentSizeRef.current?.height ?? height)))), strokeDasharray: '8 6', fill: 'none' } as const;
+            if (p.kind === 'line') {
+              return <Path d={`M ${p.x} ${p.y} L ${p.x + p.w} ${p.y + p.h}`} {...common} />;
+            }
+            if (p.kind === 'rect') {
+              return <Rect x={Math.min(p.x, p.x + p.w)} y={Math.min(p.y, p.y + p.h)} width={Math.abs(p.w)} height={Math.abs(p.h)} {...common} />;
+            }
+            return <Ellipse cx={p.x + p.w / 2} cy={p.y + p.h / 2} rx={Math.abs(p.w) / 2} ry={Math.abs(p.h) / 2} {...common} />;
+          })()}
+
+          {/* Poignées de l'outil Transformer (image du calque actif). */}
+          {activeTool === 'transform' && transformSel === 0 && (() => {
+            const img = layersRef.current?.find(l => l.id === activeLayerIdRef.current)?.images?.[0];
+            if (!img) return null;
+            const k = 14 / Math.max(0.0001, Math.min(width / (contentSizeRef.current?.width ?? width), height / (contentSizeRef.current?.height ?? height)));
+            const handles = [
+              { cx: img.x + img.width, cy: img.y + img.height, color: activeColorRef.current },
+              { cx: img.x + img.width, cy: img.y, color: '#ffffff' },
+            ];
+            return (
+              <G>
+                <Rect x={img.x} y={img.y} width={img.width} height={img.height} stroke={activeColorRef.current} strokeWidth={2 / Math.max(0.0001, Math.min(width / (contentSizeRef.current?.width ?? width), 1))} strokeDasharray="10 6" fill="none" />
+                {handles.map((h, i) => (
+                  <Circle key={i} cx={h.cx} cy={h.cy} r={k} fill={h.color} stroke={activeColorRef.current} strokeWidth={2 / Math.max(0.0001, Math.min(width / (contentSizeRef.current?.width ?? width), 1))} />
+                ))}
+              </G>
+            );
+          })()}
 
           {/* Layers. The active layer renders in two masked halves while a
               selection is being dragged; everything else paints normally. */}

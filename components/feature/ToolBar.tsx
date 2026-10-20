@@ -19,7 +19,12 @@ const TOOLS: ToolItem[] = [
   { id: 'eraser', icon: 'eraser', label: 'Gomme' },
   { id: 'fill', icon: 'format-color-fill', label: 'Remplir' },
   { id: 'lasso', icon: 'lasso', label: 'Lasso' },
+  { id: 'rectselect', icon: 'crop-square', label: 'Rect' },
   { id: 'move', icon: 'cursor-move', label: 'Déplacer' },
+  { id: 'transform', icon: 'arrow-all', label: 'Transf.' },
+  { id: 'shape', icon: 'vector-square', label: 'Formes' },
+  { id: 'text', icon: 'format-text', label: 'Texte' },
+  { id: 'eyedropper', icon: 'eyedropper', label: 'Pipette' },
   { id: 'pick', icon: 'gesture-tap', label: 'Doigt' },
 ];
 

@@ -22,6 +22,8 @@ export interface AppSettings {
   pressureCurve: string;
   /** Stabilisateur du tracé (0-100) : lissage exponentiel des points. */
   strokeStabilizer: number;
+  /** Forme de l'outil Formes (ligne / rectangle / ellipse). */
+  shapeKind: 'line' | 'rect' | 'ellipse';
   gyroCorrection: boolean;
   // Interface
   showLayerInfo: boolean;
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   cursorStyle: 'ring',
   pressureCurve: 'linear',
   strokeStabilizer: 0,
+  shapeKind: 'line',
   gyroCorrection: false,
   // Interface
   showLayerInfo: true,

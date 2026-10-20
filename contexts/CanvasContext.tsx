@@ -6,10 +6,26 @@ import React, {
 import { useTheme } from '@/hooks/useTheme';
 import { splitStrokesByPolygon, Point, distanceToStroke } from '@/services/selectionService';
 
-export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move' | 'pick';
+/** Forme géométrique posée par l'outil Formes (rendu SVG dédié, pas un
+    trait quadratique). x/y/w/h = boîte englobante en coordonnées toile. */
+export interface ShapeStroke {
+  id: string;
+  kind: 'line' | 'rect' | 'ellipse';
+  x: number; y: number; w: number; h: number;
+  color: string;
+  size: number;
+  opacity: number;
+  /** fill=true : rectangle/ellipse plein ; false : contour seul (une ligne
+      ignore fill et reste un trait). */
+  fill: boolean;
+}
+
+export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move' | 'pick' | 'eyedropper' | 'rectselect' | 'shape' | 'text' | 'transform';
 
 /** Image posée sur un calque (import du dossier vault). Coordonnées canvas. */
 export interface LayerImage {
+  /** Rotation de l'image autour de son centre (degrés, outil Transformer). */
+  angle?: number;
   id: string;
   /** dataURL PNG/JPG — autoporteur, survit à la sync. */
   src: string;
@@ -17,6 +33,16 @@ export interface LayerImage {
   y: number;
   width: number;
   height: number;
+}
+
+/** Texte posé par l'outil Texte (rendu SVG <text>, éditable par re-tap). */
+export interface TextItem {
+  id: string;
+  x: number; y: number;
+  value: string;
+  size: number;
+  color: string;
+  opacity: number;
 }
 
 export interface Layer {
@@ -27,6 +53,10 @@ export interface Layer {
   strokes: StrokePath[];
   /** Images de fond (importées du dossier vault), peintes sous les traits. */
   images?: LayerImage[];
+  /** Formes géométriques (outil Formes), sous les traits comme les images. */
+  shapes?: ShapeStroke[];
+  /** Textes posés (outil Texte), au-dessus des traits. */
+  texts?: TextItem[];
   /** Organisational group (no effect on stacking order). */
   groupId?: string | null;
 }
@@ -104,6 +134,7 @@ interface CanvasContextType {
   setLayerOpacity: (id: string, opacity: number) => void;
   /** Doigt : sélectionne le calque visible le plus haut sous le point. */
   pickLayerAt: (x: number, y: number) => Layer | null;
+  eyedropColor: (x: number, y: number) => string | null;
   addLayerGroup: (name?: string) => LayerGroup;
   renameLayerGroup: (id: string, name: string) => void;
   removeLayerGroup: (id: string) => void;
@@ -120,6 +151,12 @@ interface CanvasContextType {
   clearCanvas: () => void;
   clearLayer: (id: string) => void;
   fillLayer: (layerId: string, color: string) => void;
+  /** Outil Formes : pose une forme sur le calque actif. */
+  addShape: (kind: 'line' | 'rect' | 'ellipse', x: number, y: number, w: number, h: number) => void;
+  /** Outil Texte : pose/édite un texte sur le calque actif. */
+  addText: (x: number, y: number, value: string) => void;
+  /** Transformer l'image du calque actif : position/taille/rotation. */
+  transformLayerImage: (layerId: string, index: number, patch: { x?: number; y?: number; width?: number; height?: number; angle?: number }) => void;
 
   loadLayers: (canvasId: string, layers: Layer[], activeLayerId: string, groups?: LayerGroup[]) => void;
   markClean: () => void;
@@ -227,7 +264,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const beginStroke = useCallback((x: number, y: number, sizeScale = 1) => {
     smoothPointRef.current = { x, y };
     lastRawPointRef.current = { x, y };
-    if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick') return;
+    if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick' || activeTool === 'eyedropper' || activeTool === 'rectselect' || activeTool === 'shape' || activeTool === 'text' || activeTool === 'transform') return;
     // Painting while a lasso move is floating would render the new stroke
     // half-shifted — finalize the move first.
     commitSelection();
@@ -384,6 +421,30 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
+  /** Pipette : couleur visible au point donné (traits du plus haut vers le
+      bas, sinon le dernier fond rempli visible). null = rien sous le point. */
+  const eyedropColor = useCallback((x: number, y: number): string | null => {
+    const TOLERANCE = 10;
+    for (let li = layersRef.current.length - 1; li >= 0; li--) {
+      const layer = layersRef.current[li];
+      if (!layer.visible) continue;
+      for (let si = layer.strokes.length - 1; si >= 0; si--) {
+        const stroke = layer.strokes[si];
+        if (stroke.tool === 'fill' || stroke.tool === 'eraser') continue;
+        if (distanceToStroke(x, y, stroke.points) <= stroke.size / 2 + TOLERANCE) {
+          return stroke.color;
+        }
+      }
+    }
+    for (let li = layersRef.current.length - 1; li >= 0; li--) {
+      const layer = layersRef.current[li];
+      if (!layer.visible) continue;
+      const fills = layer.strokes.filter(st => st.tool === 'fill');
+      if (fills.length) return fills[fills.length - 1].color;
+    }
+    return null;
+  }, []);
+
   const addLayerGroup = useCallback((name?: string): LayerGroup => {
     const group: LayerGroup = { id: `lgroup-${++layerIdRef.current}`, name: name?.trim() || 'Groupe' };
     setLayerGroups(prev => [...prev, group]);
@@ -433,6 +494,63 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     });
     markDirty();
   }, [brushOpacity, saveHistory, markDirty, commitSelection]);
+
+
+  /** Outil Formes : pose une forme (contour) sur le calque actif. La ligne
+      garde w/h signés (direction), rect/ellipse sont normalisés. */
+  const addShape = useCallback((kind: 'line' | 'rect' | 'ellipse', x: number, y: number, w: number, h: number) => {
+    commitSelection();
+    const shape: ShapeStroke = {
+      id: `shape-${++strokeIdRef.current}`,
+      kind,
+      x: kind === 'line' ? x : Math.min(x, x + w),
+      y: kind === 'line' ? y : Math.min(y, y + h),
+      w: kind === 'line' ? w : Math.abs(w),
+      h: kind === 'line' ? h : Math.abs(h),
+      color: activeColor,
+      size: Math.max(1, brushSize),
+      opacity: brushOpacity,
+      fill: false,
+    };
+    setLayers(prev => {
+      saveHistory(prev);
+      return prev.map(layer =>
+        layer.id === activeLayerId ? { ...layer, shapes: [...(layer.shapes ?? []), shape] } : layer
+      );
+    });
+    markDirty();
+  }, [activeLayerId, activeColor, brushSize, brushOpacity, saveHistory, markDirty, commitSelection]);
+
+  /** Outil Texte : pose un texte (le re-tap au même point édite via le
+      composant d'édition — ici on ne fait que poser). */
+  const addText = useCallback((x: number, y: number, value: string) => {
+    commitSelection();
+    const item: TextItem = {
+      id: `text-${++strokeIdRef.current}`,
+      x, y, value,
+      size: Math.max(16, Math.round(brushSize * 2.5)),
+      color: activeColor,
+      opacity: brushOpacity,
+    };
+    setLayers(prev => {
+      saveHistory(prev);
+      return prev.map(layer =>
+        layer.id === activeLayerId ? { ...layer, texts: [...(layer.texts ?? []), item] } : layer
+      );
+    });
+    markDirty();
+  }, [activeLayerId, activeColor, brushSize, brushOpacity, saveHistory, markDirty, commitSelection]);
+
+  /** Transformer l'image d'index donné du calque (déplacer/redimensionner/
+      pivoter depuis les poignées de l'outil Transformer). */
+  const transformLayerImage = useCallback((layerId: string, index: number, patch: { x?: number; y?: number; width?: number; height?: number; angle?: number }) => {
+    setLayers(prev => prev.map(layer => {
+      if (layer.id !== layerId) return layer;
+      const images = (layer.images ?? []).map((img, i) => i === index ? { ...img, ...patch } : img);
+      return { ...layer, images };
+    }));
+    markDirty();
+  }, [markDirty]);
 
   const undo = useCallback(() => {
     // Undo cancels the current float first (nothing was applied yet); with
@@ -531,10 +649,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setActiveTool, setActiveColor, setBrushSize, setBrushOpacity,
       setActiveLayerId, setSelection, clearSelection, commitSelection,
       beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
+      addShape, addText, transformLayerImage,
       beginLasso, continueLasso, endLasso,
       moveSelection,
       addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
-      pickLayerAt, addLayerGroup, renameLayerGroup, removeLayerGroup,
+      pickLayerAt, eyedropColor, addLayerGroup, renameLayerGroup, removeLayerGroup,
       toggleGroupCollapsed, setLayerGroup, toggleGroupVisibility,
       undo, redo, snapshotHistory, clearCanvas, clearLayer, fillLayer,
       loadLayers, markClean,

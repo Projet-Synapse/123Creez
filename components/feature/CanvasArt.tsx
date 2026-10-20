@@ -4,7 +4,7 @@
 // paint the same stroke data, so the SVG path builder and the layer renderer
 // live here. Everything is pure vector rendering — no gesture handling.
 import React from 'react';
-import { Svg, Path, Rect, Defs, Mask, G, Pattern, Image as SvgImage } from 'react-native-svg';
+import { Svg, Path, Rect, Defs, Mask, G, Pattern, Ellipse, Text as SvgText, Image as SvgImage } from 'react-native-svg';
 import { StrokePath, LayerImage } from '@/contexts/CanvasContext';
 
 export function buildSvgPath(stroke: StrokePath, dx = 0, dy = 0): string {
@@ -37,7 +37,9 @@ interface LayerLike {
   visible: boolean;
   opacity: number;
   strokes: StrokePath[];
-  images?: LayerImage[];
+  images?: (LayerImage & { angle?: number })[];
+  shapes?: { id: string; kind: 'line' | 'rect' | 'ellipse'; x: number; y: number; w: number; h: number; color: string; size: number; opacity: number; fill: boolean }[];
+  texts?: { id: string; x: number; y: number; value: string; size: number; color: string; opacity: number }[];
 }
 
 interface CanvasArtProps {
@@ -108,16 +110,66 @@ export function CanvasArt({
     return (
       <G key={layer.id} opacity={layer.opacity}>
         {/* Images posées sur le calque : sous tout le reste du calque. */}
-        {(layer.images ?? []).map(img => (
-          <SvgImage
-            key={img.id}
-            href={{ uri: img.src }}
-            x={img.x + dx}
-            y={img.y + dy}
-            width={img.width}
-            height={img.height}
-          />
-        ))}
+        {(layer.images ?? []).map(img => {
+          const cx = img.x + dx + img.width / 2;
+          const cy = img.y + dy + img.height / 2;
+          const rot = img.angle ? `rotate(${img.angle} ${cx} ${cy})` : undefined;
+          return (
+            <SvgImage
+              key={img.id}
+              href={{ uri: img.src }}
+              x={img.x + dx}
+              y={img.y + dy}
+              width={img.width}
+              height={img.height}
+              transform={rot}
+            />
+          );
+        })}
+        {/* Formes géométriques (outil Formes), sous les traits. */}
+        {(layer.shapes ?? []).map(sh => {
+          if (sh.kind === 'line') {
+            return (
+              <Path
+                key={sh.id}
+                d={`M ${sh.x + dx} ${sh.y + dy} L ${sh.x + dx + sh.w} ${sh.y + dy + sh.h}`}
+                stroke={sh.color}
+                strokeWidth={sh.size}
+                strokeLinecap="round"
+                strokeOpacity={sh.opacity}
+                fill="none"
+              />
+            );
+          }
+          if (sh.kind === 'rect') {
+            return (
+              <Rect
+                key={sh.id}
+                x={sh.x + dx}
+                y={sh.y + dy}
+                width={sh.w}
+                height={sh.h}
+                stroke={sh.color}
+                strokeWidth={sh.size}
+                strokeOpacity={sh.opacity}
+                fill={sh.fill ? sh.color : 'none'}
+              />
+            );
+          }
+          return (
+            <Ellipse
+              key={sh.id}
+              cx={sh.x + dx + sh.w / 2}
+              cy={sh.y + dy + sh.h / 2}
+              rx={sh.w / 2}
+              ry={sh.h / 2}
+              stroke={sh.color}
+              strokeWidth={sh.size}
+              strokeOpacity={sh.opacity}
+              fill={sh.fill ? sh.color : 'none'}
+            />
+          );
+        })}
         {includeFill && fillStrokes.length > 0 && (() => {
           const lastFill = fillStrokes[fillStrokes.length - 1];
           return (
@@ -149,6 +201,20 @@ export function CanvasArt({
             <G mask={`url(#${eraserMaskId})`}>{paths}</G>
           </>
         ) : paths}
+        {/* Textes posés (outil Texte), au-dessus des traits. */}
+        {(layer.texts ?? []).map(t => (
+          <SvgText
+            key={t.id}
+            x={t.x + dx}
+            y={t.y + dy}
+            fill={t.color}
+            opacity={t.opacity}
+            fontSize={t.size}
+            fontFamily="sans-serif"
+          >
+            {t.value}
+          </SvgText>
+        ))}
       </G>
     );
   });

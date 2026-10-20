@@ -424,6 +424,25 @@ export default function EditorScreen() {
                 </View>
               </View>
 
+              {/* Stabilisateur inline — lisse le tracé au doigt */}
+              <View style={styles.sliderBlock}>
+                <Text style={[styles.sliderLabel, { color: theme.textMuted }]}>Stabil.</Text>
+                <View style={styles.sliderRow}>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={0}
+                    maximumValue={100}
+                    step={5}
+                    value={settings.strokeStabilizer ?? 0}
+                    onSlidingComplete={v => updateSettings({ strokeStabilizer: Math.round(v) })}
+                    minimumTrackTintColor={theme.accent}
+                    maximumTrackTintColor={theme.surfaceBorder}
+                    thumbTintColor={theme.accent}
+                  />
+                  <Text style={[styles.sliderVal, { color: theme.textSecondary }]}>{settings.strokeStabilizer ?? 0}%</Text>
+                </View>
+              </View>
+
               {/* Opacity slider inline */}
               <View style={styles.sliderBlock}>
                 <Text style={[styles.sliderLabel, { color: theme.textMuted }]}>Opacité</Text>
@@ -480,6 +499,31 @@ export default function EditorScreen() {
                     </Pressable>
                   ))}
                 </View>
+
+                {activeTool === 'shape' && (
+                  <>
+                    <Text style={[styles.sectionLabel, { color: theme.textMuted, marginTop: Spacing.sm }]}>Forme</Text>
+                    <View style={styles.presetRow}>
+                      {(['line', 'rect', 'ellipse'] as const).map(kind => (
+                        <Pressable
+                          key={kind}
+                          style={[
+                            styles.presetBtn,
+                            { backgroundColor: theme.surfaceHigh, borderColor: theme.surfaceBorder },
+                            (settings.shapeKind ?? 'line') === kind && { backgroundColor: theme.activeGlow, borderColor: theme.accent },
+                          ]}
+                          onPress={() => updateSettings({ shapeKind: kind })}
+                        >
+                          <MaterialCommunityIcons
+                            name={kind === 'line' ? 'minus' : kind === 'rect' ? 'rectangle-outline' : 'circle-outline'}
+                            size={20}
+                            color={(settings.shapeKind ?? 'line') === kind ? theme.accent : theme.textMuted}
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
 
                 <Text style={[styles.sectionLabel, { color: theme.textMuted, marginTop: Spacing.sm }]}>Opacités rapides</Text>
                 <View style={styles.presetRow}>

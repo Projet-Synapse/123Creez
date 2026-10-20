@@ -56,7 +56,22 @@ export function buildCanvasSvg(
 
     // Images du calque : sous les traits (même ordre que CanvasArt).
     for (const img of layer.images ?? []) {
-      body.push(`<image href="${img.src.replace(/&/g, '&amp;')}" x="${img.x}" y="${img.y}" width="${img.width}" height="${img.height}" preserveAspectRatio="none"/>`);
+      const cx = img.x + img.width / 2;
+      const cy = img.y + img.height / 2;
+      const rot = img.angle ? ` transform="rotate(${img.angle} ${cx} ${cy})"` : '';
+      body.push(`<image href="${img.src.replace(/&/g, '&amp;')}" x="${img.x}" y="${img.y}" width="${img.width}" height="${img.height}" preserveAspectRatio="none"${rot}/>`);
+    }
+
+    // Formes géométriques (sous les traits).
+    for (const sh of layer.shapes ?? []) {
+      const common = ` stroke="${sh.color}" stroke-width="${sh.size}" stroke-opacity="${sh.opacity}"`;
+      if (sh.kind === 'line') {
+        body.push(`<path d="M ${sh.x} ${sh.y} L ${sh.x + sh.w} ${sh.y + sh.h}" fill="none"${common} stroke-linecap="round"/>`);
+      } else if (sh.kind === 'rect') {
+        body.push(`<rect x="${sh.x}" y="${sh.y}" width="${sh.w}" height="${sh.h}" fill="${sh.fill ? sh.color : 'none'}"${common}/>`);
+      } else {
+        body.push(`<ellipse cx="${sh.x + sh.w / 2}" cy="${sh.y + sh.h / 2}" rx="${sh.w / 2}" ry="${sh.h / 2}" fill="${sh.fill ? sh.color : 'none'}"${common}/>`);
+      }
     }
 
     for (const f of fills) {
@@ -83,6 +98,11 @@ export function buildCanvasSvg(
       group = `<g opacity="${layer.opacity}">${paths}</g>`;
     }
     body.push(group);
+
+    // Textes : au-dessus des traits du calque.
+    for (const t of layer.texts ?? []) {
+      body.push(`<text x="${t.x}" y="${t.y}" fill="${t.color}" fill-opacity="${t.opacity}" font-size="${t.size}" font-family="sans-serif">${t.value.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</text>`);
+    }
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}" viewBox="0 0 ${canvasWidth} ${canvasHeight}">${body.join('')}</svg>`;

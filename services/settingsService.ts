@@ -20,7 +20,8 @@ export interface AppSettings {
   // Tools
   cursorStyle: string;
   pressureCurve: string;
-  smoothing: boolean;
+  /** Stabilisateur du tracé (0-100) : lissage exponentiel des points. */
+  strokeStabilizer: number;
   gyroCorrection: boolean;
   // Interface
   showLayerInfo: boolean;
@@ -36,7 +37,7 @@ export interface AppSettings {
   hiDpiRendering: boolean;
   antialiasing: boolean;
   batterySaver: boolean;
-  historyLimit: number;
+  historyLimit: number;  // 30 → 250 : l'undo d'une vraie session de peinture
   // Storage
   defaultExportFormat: string;
   // Accessibility
@@ -64,7 +65,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // Tools
   cursorStyle: 'ring',
   pressureCurve: 'linear',
-  smoothing: true,
+  strokeStabilizer: 0,
   gyroCorrection: false,
   // Interface
   showLayerInfo: true,
@@ -79,7 +80,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   hiDpiRendering: true,
   antialiasing: true,
   batterySaver: false,
-  historyLimit: 30,
+  historyLimit: 250,
   // Storage
   defaultExportFormat: 'PNG',
   // Accessibility

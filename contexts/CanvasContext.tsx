@@ -133,7 +133,12 @@ const createDefaultLayers = (): Layer[] => [
 
 export function CanvasProvider({ children }: { children: ReactNode }) {
   const { settings } = useTheme();
-  const historyLimit = Math.max(5, settings.historyLimit ?? 30);
+  const historyLimit = Math.max(5, settings.historyLimit ?? 250);
+  // Stabilisateur de tracé (0-100) : lissage exponentiel des points d'entrée.
+  // 0 = le trait suit le doigt brut ; 100 = très lissé (et légèrement retardé).
+  const stabilizer = Math.max(0, Math.min(100, settings.strokeStabilizer ?? 0));
+  const smoothPointRef = useRef<{ x: number; y: number } | null>(null);
+  const lastRawPointRef = useRef<{ x: number; y: number } | null>(null);
   const [canvasId, setCanvasId] = useState<string | null>(null);
   const [layers, setLayers] = useState<Layer[]>(createDefaultLayers());
   const [layerGroups, setLayerGroups] = useState<LayerGroup[]>([]);
@@ -220,6 +225,8 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const beginStroke = useCallback((x: number, y: number, sizeScale = 1) => {
+    smoothPointRef.current = { x, y };
+    lastRawPointRef.current = { x, y };
     if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick') return;
     // Painting while a lasso move is floating would render the new stroke
     // half-shifted — finalize the move first.
@@ -240,14 +247,27 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [activeTool, activeColor, brushSize, brushOpacity, activeLayerId, commitSelection]);
 
   const continueStroke = useCallback((x: number, y: number) => {
+    lastRawPointRef.current = { x, y };
+    if (stabilizer > 0) {
+      // Lissage exponentiel : le point stocké court après le doigt d'autant
+      // plus lentement que le stabilisateur est haut.
+      const a = 1 - stabilizer / 100;
+      const sp = smoothPointRef.current ?? { x, y };
+      smoothPointRef.current = { x: sp.x + (x - sp.x) * a, y: sp.y + (y - sp.y) * a };
+      const p = smoothPointRef.current;
+      setCurrentStroke(prev => prev ? { ...prev, points: [...prev.points, p] } : null);
+      return;
+    }
     setCurrentStroke(prev => prev ? { ...prev, points: [...prev.points, { x, y }] } : null);
-  }, []);
+  }, [stabilizer]);
 
   // Jette le trait/lasso EN COURS sans le committer — utilisé quand un
   // deuxième doigt transforme le geste en pinch/pan (le fragment tracé ne
   // doit pas rester sur la toile).
   const cancelStroke = useCallback(() => {
     setCurrentStroke(null);
+    smoothPointRef.current = null;
+    lastRawPointRef.current = null;
   }, []);
 
   const cancelLasso = useCallback(() => {
@@ -255,8 +275,14 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const endStroke = useCallback(() => {
+    const lastRaw = lastRawPointRef.current;
     setCurrentStroke(prev => {
       if (!prev || prev.points.length === 0) return null;
+      // Stabilisateur actif : la fin du trait rejoint le vrai dernier point
+      // du doigt (l'EMA retarde sinon, laissant le geste « inachevé »).
+      if (lastRaw && stabilizer > 0 && prev.points.length > 0) {
+        prev = { ...prev, points: [...prev.points, lastRaw] };
+      }
       setLayers(layers => {
         saveHistory(layers);
         return layers.map(layer =>
@@ -268,7 +294,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       markDirty();
       return null;
     });
-  }, [activeLayerId, saveHistory, markDirty]);
+  }, [activeLayerId, saveHistory, markDirty, stabilizer]);
 
   // ─── Lasso ───────────────────────────────────────────────────────────
   const beginLasso = useCallback((x: number, y: number) => {
@@ -480,7 +506,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       return filtered;
     });
     markDirty();
-  }, [activeLayerId, saveHistory, markDirty]);
+  }, [activeLayerId, saveHistory, markDirty, stabilizer]);
 
   // Visibility and opacity edits now mark the canvas dirty (they previously
   // weren't persisted by auto-save) and visibility changes are undoable.

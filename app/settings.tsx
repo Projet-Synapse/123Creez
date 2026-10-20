@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import { useTheme } from '@/hooks/useTheme';
 import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
 import { useAlert } from '@/template';
@@ -292,7 +293,21 @@ export default function SettingsScreen() {
 
               <SectionTitle label="Lissage" theme={theme} />
               <Card theme={theme}>
-                <ToggleRow label="Lissage du tracé" value={settings.smoothing ?? true} onToggle={v => updateSettings({ smoothing: v })} theme={theme} />
+                <View style={styles.stabilizerRow}>
+                  <Text style={styles.stabilizerLabel}>Stabilisateur du tracé</Text>
+                  <Slider
+                    style={styles.stabilizerSlider}
+                    minimumValue={0}
+                    maximumValue={100}
+                    step={5}
+                    value={settings.strokeStabilizer ?? 0}
+                    onSlidingComplete={v => updateSettings({ strokeStabilizer: Math.round(v) })}
+                    minimumTrackTintColor={theme.accent}
+                    maximumTrackTintColor={theme.surfaceBorder}
+                    thumbTintColor={theme.accent}
+                  />
+                  <Text style={styles.stabilizerValue}>{settings.strokeStabilizer ?? 0}%</Text>
+                </View>
                 <Divider theme={theme} />
                 <ToggleRow label="Correction gyroscopique" value={settings.gyroCorrection ?? false} onToggle={v => updateSettings({ gyroCorrection: v })} theme={theme} />
               </Card>
@@ -349,9 +364,9 @@ export default function SettingsScreen() {
 
               <SectionTitle label="Limite d'historique (Annuler)" theme={theme} />
               <View style={styles.historyRow}>
-                {[10, 20, 30, 50, 100].map(n => (
-                  <Pressable key={n} style={[styles.historyBtn, (settings.historyLimit ?? 30) === n && { backgroundColor: theme.accent, borderColor: theme.accent }]} onPress={() => updateSettings({ historyLimit: n })}>
-                    <Text style={[styles.historyText, (settings.historyLimit ?? 30) === n && { color: '#0d0d0d' }]}>{n}</Text>
+                {[30, 50, 100, 250, 500].map(n => (
+                  <Pressable key={n} style={[styles.historyBtn, (settings.historyLimit ?? 250) === n && { backgroundColor: theme.accent, borderColor: theme.accent }]} onPress={() => updateSettings({ historyLimit: n })}>
+                    <Text style={[styles.historyText, (settings.historyLimit ?? 250) === n && { color: '#0d0d0d' }]}>{n}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -712,6 +727,10 @@ function makeStyles(theme: any) {
     pressureBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder },
     pressureText: { fontSize: 13, color: theme.textSecondary, fontWeight: '600' },
     // Performance
+    stabilizerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+    stabilizerLabel: { fontSize: 13, color: theme.textPrimary, width: 150 },
+    stabilizerSlider: { flex: 1, height: 30 },
+    stabilizerValue: { fontSize: 12, color: theme.textSecondary, width: 34, textAlign: 'right' },
     historyRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
     historyBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder },
     historyText: { fontSize: 13, color: theme.textSecondary, fontWeight: '600' },

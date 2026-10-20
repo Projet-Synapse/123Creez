@@ -3,12 +3,14 @@ import React from 'react';
 import { View, StyleSheet, Text, Pressable } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useCanvas } from '@/hooks/useCanvas';
+import { useTheme } from '@/hooks/useTheme';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 const PRESET_SIZES = [2, 5, 10, 20, 40];
 
 const BrushPanel: React.FC = () => {
   const { brushSize, setBrushSize, brushOpacity, setBrushOpacity, activeColor, activeTool } = useCanvas();
+  const { theme, settings, updateSettings } = useTheme();
 
   const previewSize = Math.min(brushSize, 50);
   const displayColor = activeTool === 'eraser' ? '#ffffff' : activeColor;
@@ -30,6 +32,23 @@ const BrushPanel: React.FC = () => {
           ]} />
         </View>
       </View>
+
+      {/* Stabilisateur du tracé — accessible en dessinant (réglage persistant) */}
+      <View style={styles.row}>
+        <Text style={styles.label}>Stabilisateur</Text>
+        <Text style={styles.value}>{settings.strokeStabilizer ?? 0}%</Text>
+      </View>
+      <Slider
+        style={styles.slider}
+        minimumValue={0}
+        maximumValue={100}
+        step={5}
+        value={settings.strokeStabilizer ?? 0}
+        onSlidingComplete={v => updateSettings({ strokeStabilizer: Math.round(v) })}
+        minimumTrackTintColor={Colors.accent}
+        maximumTrackTintColor={Colors.surfaceBorder}
+        thumbTintColor={Colors.accent}
+      />
 
       {/* Size */}
       <View style={styles.row}>

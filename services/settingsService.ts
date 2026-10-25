@@ -30,6 +30,12 @@ export interface AppSettings {
   /** Sélection d'outils : barre latérale fixe ou popup repliable. */
   toolbarMode: 'bar' | 'popup';
   gyroCorrection: boolean;
+  /** Sensibilité du déplacement à deux doigts / molette (multiplicateur, 1 = d'origine). */
+  panSensitivity: number;
+  /** Sensibilité du zoom pinch / Ctrl+molette (exposant du rapport, 1 = d'origine). */
+  zoomSensitivity: number;
+  /** Affichage en zoom : lisse (vectoriel) ou pixélisé (pixels du document agrandis sans lissage). Affichage seul. */
+  zoomRendering: 'smooth' | 'pixelated';
   // Interface
   showLayerInfo: boolean;
   uiAnimations: boolean;
@@ -78,6 +84,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   redoThreeFingerTap: true,
   toolbarMode: 'bar',
   gyroCorrection: false,
+  panSensitivity: 1,
+  zoomSensitivity: 1,
+  zoomRendering: 'smooth',
   // Interface
   showLayerInfo: true,
   uiAnimations: true,

@@ -2,13 +2,15 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, ScrollView, Switch, Modal, TextInput,
-  ActivityIndicator, Linking,
+  ActivityIndicator, Linking, useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
+import { SENSITIVITY_MIN, SENSITIVITY_MAX, clampSensitivity } from '@/services/gestureMath';
+import { useSettingsNavLayout } from '@/hooks/useSettingsNavLayout';
 import { useTheme } from '@/hooks/useTheme';
 import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
 import { useAlert } from '@/template';
@@ -66,6 +68,9 @@ export default function SettingsScreen() {
   const [showCustomWsBg, setShowCustomWsBg] = useState(false);
   const [customWsHex, setCustomWsHex] = useState('');
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  // Écran étroit (téléphone en portrait) : navigation en onglets en haut.
+  const { width: windowWidth } = useWindowDimensions();
+  const navLayout = useSettingsNavLayout(windowWidth);
   const [storageInfo, setStorageInfo] = useState<{ canvasCount: number; totalSize: number; vaultKeys: string[] } | null>(null);
   const [loadingStorage, setLoadingStorage] = useState(false);
   // Largeur de la colonne de navigation, réglable par la poignée sur son
@@ -148,7 +153,29 @@ export default function SettingsScreen() {
         <View style={{ width: 40 }} />
       </View>
 
+      {navLayout === 'top' && (
+        <View style={styles.topNavWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.topNavContent}>
+            {SECTIONS.map(s => (
+              <Pressable
+                key={s.id}
+                style={[styles.topNavItem, activeSection === s.id && { backgroundColor: theme.activeGlow, borderColor: theme.accent }]}
+                onPress={() => setActiveSection(activeSection === s.id ? null : s.id)}
+              >
+                <MaterialCommunityIcons
+                  name={s.icon as any}
+                  size={16}
+                  color={activeSection === s.id ? theme.accent : theme.textSecondary}
+                />
+                <Text style={[styles.topNavLabel, activeSection === s.id && { color: theme.accent }]}>{s.label}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       <View style={styles.body}>
+        {navLayout === 'side' && (<>
         {/* Left nav — width adjustable via the handle on its right edge. */}
         <ScrollView style={[styles.navCol, { width: navWidth }]} showsVerticalScrollIndicator={false}>
           {SECTIONS.map(s => (
@@ -174,6 +201,7 @@ export default function SettingsScreen() {
           borderColor={theme.surfaceBorder}
           activeColor={theme.accent}
         />
+        </>)}
 
         {/* Right content */}
         <ScrollView style={styles.contentCol} showsVerticalScrollIndicator={false}>
@@ -323,6 +351,33 @@ export default function SettingsScreen() {
                     thumbTintColor={theme.accent}
                   />
                   <Text style={styles.stabilizerValue}>{settings.strokeStabilizer ?? 0}%</Text>
+                </View>
+                <Divider theme={theme} />
+                <SensitivityRow
+                  label="Sensibilité du déplacement"
+                  value={settings.panSensitivity}
+                  onChange={v => updateSettings({ panSensitivity: v })}
+                  theme={theme}
+                  styles={styles}
+                />
+                <SensitivityRow
+                  label="Sensibilité du zoom"
+                  value={settings.zoomSensitivity}
+                  onChange={v => updateSettings({ zoomSensitivity: v })}
+                  theme={theme}
+                  styles={styles}
+                />
+                <Text style={styles.stabilizerLabel}>Affichage en zoom</Text>
+                <View style={styles.historyRow}>
+                  {(['smooth', 'pixelated'] as const).map(mode => (
+                    <Pressable
+                      key={mode}
+                      style={[styles.historyBtn, (settings.zoomRendering ?? 'smooth') === mode && { backgroundColor: theme.accent, borderColor: theme.accent }]}
+                      onPress={() => updateSettings({ zoomRendering: mode })}
+                    >
+                      <Text style={[styles.historyText, (settings.zoomRendering ?? 'smooth') === mode && { color: '#0d0d0d' }]}>{mode === 'smooth' ? 'Lisse' : 'Pixélisé'}</Text>
+                    </Pressable>
+                  ))}
                 </View>
                 <Divider theme={theme} />
                 <ToggleRow label="Correction gyroscopique" value={settings.gyroCorrection ?? false} onToggle={v => updateSettings({ gyroCorrection: v })} theme={theme} />
@@ -650,6 +705,31 @@ export default function SettingsScreen() {
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
+function SensitivityRow({ label, value, onChange, theme, styles }: {
+  label: string; value: number | undefined; onChange: (v: number) => void; theme: any; styles: any;
+}) {
+  const v = clampSensitivity(value);
+  return (
+    <View style={styles.stabilizerRow}>
+      <Text style={styles.stabilizerLabel}>{label}</Text>
+      <Slider
+        style={styles.stabilizerSlider}
+        minimumValue={SENSITIVITY_MIN}
+        maximumValue={SENSITIVITY_MAX}
+        step={0.05}
+        value={v}
+        onSlidingComplete={x => onChange(Math.round(x * 100) / 100)}
+        minimumTrackTintColor={theme.accent}
+        maximumTrackTintColor={theme.surfaceBorder}
+        thumbTintColor={theme.accent}
+      />
+      <Pressable onPress={() => onChange(1)} hitSlop={6} accessibilityLabel={`${label} : remettre à 1×`}>
+        <Text style={styles.stabilizerValue}>{v.toFixed(2)}×</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function SectionTitle({ label, theme }: { label: string; theme: any }) {
   return (
     <Text style={{ fontSize: 11, fontWeight: '700', color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginTop: 16, marginBottom: 8 }}>
@@ -707,6 +787,10 @@ function makeStyles(theme: any) {
     body: { flex: 1, flexDirection: 'row' },
     navCol: { width: 160, borderRightWidth: 1, borderRightColor: theme.surfaceBorder, backgroundColor: theme.panelBg, paddingVertical: 8 },
     navItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 12, marginHorizontal: 6, borderRadius: 10, borderWidth: 1, borderColor: 'transparent', marginBottom: 2 },
+    topNavWrap: { backgroundColor: theme.panelBg, borderBottomWidth: 1, borderBottomColor: theme.surfaceBorder },
+    topNavContent: { paddingHorizontal: 8, paddingVertical: 6, gap: 6 },
+    topNavItem: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: 'transparent' },
+    topNavLabel: { fontSize: 12, color: theme.textSecondary, fontWeight: '600' },
     navLabel: { fontSize: 12, color: theme.textSecondary, fontWeight: '600', flex: 1 },
     contentCol: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
     section: {},

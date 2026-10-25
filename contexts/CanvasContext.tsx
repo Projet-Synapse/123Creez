@@ -20,7 +20,7 @@ export interface ShapeStroke {
   fill: boolean;
 }
 
-export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move' | 'pick' | 'eyedropper' | 'rectselect' | 'shape' | 'text' | 'transform';
+export type Tool = 'brush' | 'pencil' | 'eraser' | 'fill' | 'lasso' | 'move' | 'pick' | 'eyedropper' | 'rectselect' | 'shape' | 'text' | 'transform' | 'measure';
 
 /** Image posée sur un calque (import du dossier vault). Coordonnées canvas. */
 export interface LayerImage {
@@ -153,6 +153,9 @@ interface CanvasContextType {
   fillLayer: (layerId: string, color: string) => void;
   /** Outil Formes : pose une forme sur le calque actif. */
   addShape: (kind: 'line' | 'rect' | 'ellipse', x: number, y: number, w: number, h: number) => void;
+  /** Outil Mesure > « Tracer » : segments droits nets (pas de stabilisateur),
+      couleur/épaisseur/opacité du pinceau, UNE entrée d'historique. */
+  addLines: (lines: Array<{ x: number; y: number; w: number; h: number }>) => void;
   /** Outil Texte : pose/édite un texte sur le calque actif. */
   addText: (x: number, y: number, value: string) => void;
   /** Transformer l'image du calque actif : position/taille/rotation. */
@@ -521,6 +524,27 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     markDirty();
   }, [activeLayerId, activeColor, brushSize, brushOpacity, saveHistory, markDirty, commitSelection]);
 
+  const addLines = useCallback((lines: Array<{ x: number; y: number; w: number; h: number }>) => {
+    if (lines.length === 0) return;
+    commitSelection();
+    const shapes: ShapeStroke[] = lines.map(l => ({
+      id: `shape-${++strokeIdRef.current}`,
+      kind: 'line',
+      x: l.x, y: l.y, w: l.w, h: l.h,
+      color: activeColor,
+      size: Math.max(1, brushSize),
+      opacity: brushOpacity,
+      fill: false,
+    }));
+    setLayers(prev => {
+      saveHistory(prev);
+      return prev.map(layer =>
+        layer.id === activeLayerId ? { ...layer, shapes: [...(layer.shapes ?? []), ...shapes] } : layer
+      );
+    });
+    markDirty();
+  }, [activeLayerId, activeColor, brushSize, brushOpacity, saveHistory, markDirty, commitSelection]);
+
   /** Outil Texte : pose un texte (le re-tap au même point édite via le
       composant d'édition — ici on ne fait que poser). */
   const addText = useCallback((x: number, y: number, value: string) => {
@@ -649,7 +673,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       setActiveTool, setActiveColor, setBrushSize, setBrushOpacity,
       setActiveLayerId, setSelection, clearSelection, commitSelection,
       beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
-      addShape, addText, transformLayerImage,
+      addShape, addLines, addText, transformLayerImage,
       beginLasso, continueLasso, endLasso,
       moveSelection,
       addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,

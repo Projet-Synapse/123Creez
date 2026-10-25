@@ -17,6 +17,13 @@ import { CanvasArt, buildSvgPath } from '@/components/feature/CanvasArt';
 import { scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible, meetFitRect } from '@/services/gestureMath';
 import { capturePixelSnapshot } from '@/services/pixelSnapshot';
 import PixelatedView from '@/components/feature/PixelatedView';
+import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
+import {
+  Measure, MeasureMode, Pt, viewParams, screenToDoc, screenLenToDoc, distance,
+  snapToPoints, snapPointToAngle, measureEndpoints, measureToLines,
+  setDistanceFromInput, setAngleFromInput, segmentAngleDeg, angleAtVertex,
+  HANDLE_HIT_PX, ENDPOINT_SNAP_PX,
+} from '@/services/measureMath';
 
 function getStrokeLinecap(tool: string): 'round' | 'square' | 'butt' {
   if (tool === 'pencil') return 'square';
@@ -111,9 +118,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     selection, currentLassoPoints,
     beginLasso, continueLasso, endLasso,
     moveSelection, snapshotHistory, pickLayerAt,
-    addShape, addText, transformLayerImage, eyedropColor, setActiveColor,
+    addShape, addLines, addText, transformLayerImage, eyedropColor, setActiveColor,
   } = useCanvas();
-  const { settings } = useTheme();
+  const { settings, theme } = useTheme();
 
   // ─── Container layout ref ─────────────────────────────────────────
   const containerRef = useRef<View>(null);
@@ -220,6 +227,35 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const notePixelZoomRef = useRef(notePixelZoom);
   notePixelZoomRef.current = notePixelZoom;
   const [pixelGesture, setPixelGesture] = useState(false);
+
+  // ─── Outil Mesure (surcouche d'affichage, état LOCAL) ─────────────
+  // Jamais dans les calques / l'historique / la sauvegarde / l'export ; seule
+  // l'action « Tracer » crée de vrais traits (via addLines, annulable).
+  const [measure, setMeasureState] = useState<Measure | null>(null);
+  const measureRef = useRef<Measure | null>(null);
+  const setMeasure = useCallback((m: Measure | null) => { measureRef.current = m; setMeasureState(m); }, []);
+  const prevMeasureRef = useRef<Measure | null>(null);
+  const [measureMode, setMeasureMode] = useState<MeasureMode>('distance');
+  const measureModeRef = useRef(measureMode);
+  measureModeRef.current = measureMode;
+  const [snap15, setSnap15] = useState(false);
+  const [snapEnds, setSnapEnds] = useState(true);
+  const snapOptsRef = useRef({ snap15, snapEnds });
+  snapOptsRef.current = { snap15, snapEnds };
+  const shiftDownRef = useRef(false);
+  const measureDragRef = useRef<{ key: 'a' | 'b' | 'v'; before: Measure | null; fresh: boolean } | null>(null);
+  const [, setMeasureViewTick] = useState(0);
+  const measureRafRef = useRef<number | null>(null);
+  const bumpMeasureView = useCallback(() => {
+    if (activeToolRef.current !== 'measure' || !measureRef.current) return;
+    if (measureRafRef.current !== null) return;
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      setMeasureViewTick(t => t + 1);
+    });
+  }, []);
+  const bumpMeasureViewRef = useRef(bumpMeasureView);
+  bumpMeasureViewRef.current = bumpMeasureView;
   const setPixelGestureRef = useRef(setPixelGesture);
 
   // Zoom around a given point (in local/canvas-container coordinates) while
@@ -241,6 +277,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     lastTranslateY.current = newTY;
     onZoomChangeRef.current?.(Math.round(newScale * 100));
     notePixelZoomRef.current(newScale);
+    bumpMeasureViewRef.current();
   }, [scale, translateX, translateY]);
 
   const resetZoomInternal = useCallback(() => {
@@ -252,6 +289,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     lastTranslateY.current = 0;
     onZoomChangeRef.current?.(100);
     notePixelZoomRef.current(1);
+    bumpMeasureViewRef.current();
   }, [scale, translateX, translateY]);
 
   // Mouse wheel: plain scroll pans the canvas, Ctrl/Cmd+scroll zooms toward
@@ -281,6 +319,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       translateY.value = newTY;
       lastTranslateX.current = newTX;
       lastTranslateY.current = newTY;
+      bumpMeasureViewRef.current();
     };
 
     node.addEventListener('wheel', handleWheel, { passive: false });
@@ -386,6 +425,83 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     return { x: vx, y: vy };
   }
 
+  // ─── Outil Mesure : gestes à un doigt ─────────────────────────────
+  function currentView() {
+    const zone = zoneRef.current;
+    const cs = contentSizeRef.current ?? { width: zone.w, height: zone.h };
+    return viewParams(lastScale.current, lastTranslateX.current, lastTranslateY.current, zone.w, zone.h, cs.width, cs.height);
+  }
+  function measureLocal(pageX: number, pageY: number): Pt {
+    const layout = containerLayout.current;
+    return { x: layout ? pageX - layout.x : pageX, y: layout ? pageY - layout.y : pageY };
+  }
+  function measurePlace(key: 'a' | 'b' | 'v', raw: Pt, m: Measure): Pt {
+    const view = currentView();
+    let p = raw;
+    if (snapOptsRef.current.snapEnds) {
+      // Accroche aux extrémités de la mesure précédente et aux autres
+      // poignées de la mesure courante (enchaîner des segments / polygones).
+      const others = measureEndpoints(m).filter(q => q !== m[key]);
+      p = snapToPoints(p, [...measureEndpoints(prevMeasureRef.current), ...others], screenLenToDoc(ENDPOINT_SNAP_PX, view));
+    }
+    if ((snapOptsRef.current.snap15 || shiftDownRef.current) && p === raw) {
+      const anchor = m.mode === 'distance' ? (key === 'b' ? m.a : m.b) : (key === 'v' ? null : m.v);
+      if (anchor) p = snapPointToAngle(anchor, p);
+    }
+    return p;
+  }
+  function measureGrant(pageX: number, pageY: number) {
+    const view = currentView();
+    const d = screenToDoc(measureLocal(pageX, pageY), view);
+    const m = measureRef.current;
+    const hit = screenLenToDoc(HANDLE_HIT_PX, view);
+    if (m && m.mode === measureModeRef.current) {
+      const keys: ('a' | 'b' | 'v')[] = ['b', 'a', 'v'];
+      for (const k of keys) {
+        const q = m[k];
+        if (q && distance(q, d) <= hit) { measureDragRef.current = { key: k, before: m, fresh: false }; return; }
+      }
+      // Angle : deuxième glisser = second bras depuis le sommet.
+      if (m.mode === 'angle' && m.v && !m.b) {
+        measureDragRef.current = { key: 'b', before: m, fresh: false };
+        setMeasure({ ...m, b: measurePlace('b', d, m) });
+        return;
+      }
+    }
+    if (m && measureToLines(m).length > 0) prevMeasureRef.current = m;
+    const mode = measureModeRef.current;
+    const draft: Measure = mode === 'distance'
+      ? { mode: 'distance', a: d, b: d, v: null }
+      : { mode: 'angle', v: d, a: d, b: null };
+    const start = measurePlace(mode === 'distance' ? 'a' : 'v', d, draft);
+    const fresh: Measure = mode === 'distance'
+      ? { ...draft, a: start, b: start } : { ...draft, v: start, a: start };
+    measureDragRef.current = { key: mode === 'distance' ? 'b' : 'a', before: m, fresh: true };
+    setMeasure(fresh);
+  }
+  function measureMove(pageX: number, pageY: number) {
+    const drag = measureDragRef.current;
+    const m = measureRef.current;
+    if (!drag || !m) return;
+    const d = screenToDoc(measureLocal(pageX, pageY), currentView());
+    setMeasure({ ...m, [drag.key]: measurePlace(drag.key, d, m) });
+  }
+  function measureEnd(cancel: boolean) {
+    const drag = measureDragRef.current;
+    measureDragRef.current = null;
+    if (!drag) return;
+    const m = measureRef.current;
+    const tiny = !!m && m.mode === 'distance' && !!m.b && distance(m.a, m.b) === 0;
+    const tinyAngle = !!m && m.mode === 'angle' && !!m.v && drag.fresh && distance(m.v, m.a) === 0;
+    if (cancel || (drag.fresh && (tiny || tinyAngle))) setMeasure(drag.before);
+  }
+  const measureGrantRef = useRef(measureGrant);
+  measureGrantRef.current = measureGrant;
+  const measureMoveRef = useRef(measureMove);
+  measureMoveRef.current = measureMove;
+  const measureEndRef = useRef(measureEnd);
+  measureEndRef.current = measureEnd;
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -410,6 +526,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           // doigt est JETÉ (pas commité) — c'est une tentative de traçage.
           cancelStrokeRef.current();
           cancelLassoRef.current();
+          measureEndRef.current(true);
           pinchStartDistance.current = getDistance(touches);
           pinchStartScale.current = lastScale.current;
           const mid = getMidpointPage(touches);
@@ -423,6 +540,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         isPinching.current = false;
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
+
+        if (tool === 'measure') {
+          isDrawing.current = true;
+          measureGrantRef.current(pageX, pageY);
+          return;
+        }
 
         if (tool === 'eyedropper') {
           const c = toCanvasCoords(pageX, pageY);
@@ -526,6 +649,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
             isDrawing.current = false;
             cancelStrokeRef.current();
             cancelLassoRef.current();
+            measureEndRef.current(true);
             pinchStartDistance.current = getDistance(touches);
             pinchStartScale.current = lastScale.current;
             const mid = getMidpointPage(touches);
@@ -555,12 +679,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           translateY.value = newTY;
           lastTranslateX.current = newTX;
           lastTranslateY.current = newTY;
+          bumpMeasureViewRef.current();
           return;
         }
 
         if (!isDrawing.current) return;
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
+
+        if (tool === 'measure') {
+          measureMoveRef.current(pageX, pageY);
+          return;
+        }
 
         if (tool === 'rectselect' && rectStartRef.current) {
           // Rectangle de sélection : 4 coins mis à jour en continu.
@@ -662,6 +792,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }
         isDrawing.current = false;
         const tool = activeToolRef.current;
+        if (tool === 'measure') {
+          measureEndRef.current(false);
+          return;
+        }
         if (tool === 'lasso') {
           endLassoRef.current();
           return;
@@ -699,6 +833,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         notePixelZoomRef.current(lastScale.current);
         isPinching.current = false;
         isDrawing.current = false;
+        measureEndRef.current(true);
+        if (activeToolRef.current === 'measure') return;
         endStrokeRef.current();
         endLassoRef.current();
       },
@@ -805,6 +941,45 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   useEffect(() => {
     if (!pixelEligible) setPixelSnap(null);
   }, [pixelEligible]);
+  // Shift (desktop) = magnétisme 15° temporaire.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const on = (e: KeyboardEvent) => { shiftDownRef.current = e.shiftKey; };
+    window.addEventListener('keydown', on);
+    window.addEventListener('keyup', on);
+    return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on); };
+  }, []);
+  // Changer de mode (distance/angle) repart d'une mesure vierge.
+  const changeMeasureMode = useCallback((m: MeasureMode) => {
+    if (m === measureModeRef.current) return;
+    if (measureRef.current && measureToLines(measureRef.current).length > 0) prevMeasureRef.current = measureRef.current;
+    setMeasure(null);
+    setMeasureMode(m);
+  }, [setMeasure]);
+  const measureTrace = useCallback(() => {
+    const m = measureRef.current;
+    const lines = measureToLines(m);
+    if (lines.length === 0) return;
+    addLines(lines.map(l => ({ x: l.from.x, y: l.from.y, w: l.to.x - l.from.x, h: l.to.y - l.from.y })));
+    // La mesure tracée devient la « précédente » : le prochain segment
+    // s'accroche à ses extrémités (polygones).
+    prevMeasureRef.current = m;
+    setMeasure(null);
+  }, [addLines, setMeasure]);
+  const measureClear = useCallback(() => { prevMeasureRef.current = null; setMeasure(null); }, [setMeasure]);
+  const measureLen = useCallback((n: number) => {
+    const m = measureRef.current;
+    if (!m || !m.b) return;
+    if (m.mode === 'distance') setMeasure(setDistanceFromInput(m, n, segmentAngleDeg(m.a, m.b)));
+    else if (m.v) setMeasure(setAngleFromInput(m, angleAtVertex(m.a, m.v, m.b), n));
+  }, [setMeasure]);
+  const measureDeg = useCallback((n: number) => {
+    const m = measureRef.current;
+    if (!m || !m.b) return;
+    if (m.mode === 'distance') setMeasure(setDistanceFromInput(m, distance(m.a, m.b), n));
+    else setMeasure(setAngleFromInput(m, n));
+  }, [setMeasure]);
+
   const showPixel = pixelEligible && !pixelGesture && !pixelSuppressed && !!pixelSnap;
   pixelVisibleRef.current = showPixel;
 
@@ -994,6 +1169,22 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           <PixelatedView source={pixelSnap} width={width} height={height} />
         )}
       </Animated.View>
+      {/* Outil Mesure : hors de la vue zoomée (taille constante à l'écran),
+          hors de l'instantané pixélisé, masqué pendant l'export. */}
+      {activeTool === 'measure' && !pixelSuppressed && measure && (
+        <MeasureGraphics measure={measure} view={viewParams(lastScale.current, lastTranslateX.current, lastTranslateY.current, width, height, docW, docH)} width={width} height={height} />
+      )}
+      {activeTool === 'measure' && !pixelSuppressed && (
+        <MeasurePanel
+          accent={theme.accent}
+          mode={measureMode} setMode={changeMeasureMode}
+          snap15={snap15} setSnap15={setSnap15}
+          snapEnds={snapEnds} setSnapEnds={setSnapEnds}
+          measure={measure}
+          onLen={measureLen} onDeg={measureDeg}
+          onTrace={measureTrace} onClear={measureClear}
+        />
+      )}
     </View>
   );
 });

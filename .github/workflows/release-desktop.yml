@@ -88,6 +88,14 @@ jobs:
           fi
 
       - name: Build and publish
-        run: node scripts/build-desktop.js --publish ${{ matrix.target }}
+        run: node scripts/build-desktop.js ${{ matrix.target }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            release/*.exe
+            release/*.AppImage
+            release/*.dmg

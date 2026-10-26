@@ -24,7 +24,7 @@ const TopBar: React.FC<Props> = ({ onExport }) => {
       {/* App name */}
       <View style={styles.brandArea}>
         <MaterialCommunityIcons name="brush" size={18} color={Colors.accent} />
-        <Text style={styles.appName}>PaintStudio</Text>
+        <Text style={styles.appName}>123Créez</Text>
       </View>
 
       {/* Status */}

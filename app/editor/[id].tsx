@@ -1,7 +1,7 @@
 // Powered by OnSpace.AI
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated, Platform, Modal, ScrollView,
+  View, StyleSheet, Dimensions, Pressable, Text, Animated as RNAnimated, Platform, Modal, ScrollView, AppState,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,6 +21,9 @@ import EditorTopBar from '@/components/feature/EditorTopBar';
 import ResizeHandle from '@/components/feature/ResizeHandle';
 import { Tool } from '@/contexts/CanvasContext';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
+
+/** Délai d'inactivité avant la sauvegarde automatique après une modif. */
+const AUTOSAVE_DEBOUNCE_MS = 1200;
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -125,16 +128,60 @@ export default function EditorScreen() {
     });
   }, [id]);
 
-  // Auto-save
-  const save = useCallback(async () => {
+  // ─── Sauvegarde automatique (il n'y a plus de bouton « Sauvegarder ») ──
+  // Toujours actives, quel que soit le réglage d'intervalle :
+  //  - après chaque trait/action : AUTOSAVE_DEBOUNCE_MS après la dernière modif ;
+  //  - à la sortie de l'éditeur (bouton retour, retour système, démontage) ;
+  //  - à la mise en arrière-plan de l'appli (AppState) et de l'onglet (web).
+  // Le réglage « Sauvegarde auto » (intervalle) reste un filet en plus.
+  // Les autosaves en cours de travail ne « posent » pas une sélection lasso
+  // flottante (on enregistre l'état d'avant le déplacement) ; seule la
+  // sortie de l'éditeur la pose, comme avant.
+  const latestRef = useRef({ layers, activeLayerId, layerGroups, isDirty });
+  latestRef.current = { layers, activeLayerId, layerGroups, isDirty };
+  const savingRef = useRef<Promise<void> | null>(null);
+  const saveNow = useCallback(async (opts?: { commit?: boolean }) => {
     if (!id) return;
-    // A floating lasso move isn't in the stroke data yet — bake it in first
-    // so what gets persisted matches what's on screen.
-    const committed = commitSelection();
-    if (!isDirty && !committed) return;
-    await persistCanvas(id, committed ?? layers, activeLayerId, layerGroups);
-    markClean();
-  }, [id, isDirty, layers, activeLayerId, persistCanvas, markClean, commitSelection]);
+    // Une sauvegarde à la fois : la suivante repart de l'état le plus récent.
+    if (savingRef.current) { try { await savingRef.current; } catch { /* déjà signalé */ } }
+    const committed = opts?.commit ? commitSelection() : null;
+    const snap = latestRef.current;
+    if (!snap.isDirty && !committed) return;
+    const saved = committed ?? snap.layers;
+    const p = persistCanvas(id, saved, snap.activeLayerId, snap.layerGroups);
+    savingRef.current = p;
+    try {
+      await p;
+      // Si l'on a dessiné pendant l'écriture, la toile reste « modifiée »
+      // pour que la prochaine autosave reprenne ces traits.
+      if (latestRef.current.layers === snap.layers) markClean();
+    } finally {
+      if (savingRef.current === p) savingRef.current = null;
+    }
+  }, [id, persistCanvas, markClean, commitSelection]);
+  const save = useCallback(() => saveNow({ commit: true }), [saveNow]);
+  const autoSave = useCallback(() => saveNow({ commit: false }), [saveNow]);
+
+  // Après chaque trait/action (débounce).
+  useEffect(() => {
+    if (!isDirty || !canvasLoaded) return;
+    const t = setTimeout(() => { autoSave(); }, AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [isDirty, layers, layerGroups, activeLayerId, canvasLoaded, autoSave]);
+
+  // Mise en arrière-plan (Android/iOS) : flush immédiat.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', st => {
+      if (st !== 'active') autoSave();
+    });
+    return () => sub.remove();
+  }, [autoSave]);
+
+  // Sortie de l'éditeur par n'importe quel chemin (y compris le retour
+  // système Android, qui ne passe pas par handleBack) : flush au démontage.
+  const saveOnExitRef = useRef(save);
+  saveOnExitRef.current = save;
+  useEffect(() => () => { saveOnExitRef.current(); }, []);
 
   // Temps de dessin : +1 s/seconde (l'écran ouvert = on œuvre), flush au
   // vault toutes les 30 s et au démontage.
@@ -156,14 +203,14 @@ export default function EditorScreen() {
   useEffect(() => {
     const interval = settings.autoSaveInterval;
     if (interval <= 0) return;
-    autoSaveRef.current = setInterval(save, interval * 1000);
+    autoSaveRef.current = setInterval(autoSave, interval * 1000);
     return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
-  }, [save, settings.autoSaveInterval]);
+  }, [autoSave, settings.autoSaveInterval]);
 
   // Data-loss guard on web: closing the tab or navigating away with unsaved
   // changes fires a last-chance save instead of silently dropping work.
-  const saveRef = useRef(save);
-  saveRef.current = save;
+  const saveRef = useRef(autoSave);
+  saveRef.current = autoSave;
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
     const persistNow = () => { saveRef.current(); };
@@ -187,12 +234,11 @@ export default function EditorScreen() {
     router.back();
   }, [save, router]);
 
+  // Ctrl/Cmd+S : force une sauvegarde immédiate, sans popup (le bouton
+  // « Sauvegarder » a disparu, la sauvegarde est automatique).
   const handleSave = useCallback(async () => {
-    const committed = commitSelection();
-    await persistCanvas(id!, committed ?? layers, activeLayerId, layerGroups);
-    markClean();
-    showAlert('Sauvegardé', 'La toile a été enregistrée dans le vault.');
-  }, [id, layers, activeLayerId, persistCanvas, markClean, showAlert, commitSelection]);
+    await saveNow({ commit: false });
+  }, [saveNow]);
 
   const handleClear = useCallback(() => {
     showAlert('Effacer le canvas', 'Voulez-vous effacer tous les calques ?', [
@@ -343,8 +389,6 @@ export default function EditorScreen() {
           canvasName={canvasName}
           isDirty={isDirty}
           onBack={handleBack}
-          onSave={handleSave}
-          onExport={handleExport}
           onHelp={() => setShowShortcuts(true)}
           transparentBg={canvasTransparentBg}
           onToggleTransparentBg={toggleTransparentBg}
@@ -672,7 +716,7 @@ export default function EditorScreen() {
                 { keys: 'Ctrl/Cmd + Z', label: 'Annuler' },
                 { keys: 'Ctrl/Cmd + Maj + Z', label: 'Rétablir' },
                 { keys: 'Ctrl/Cmd + Y', label: 'Rétablir (alternatif)' },
-                { keys: 'Ctrl/Cmd + S', label: 'Sauvegarder' },
+                { keys: 'Ctrl/Cmd + S', label: 'Forcer la sauvegarde (automatique sinon)' },
                 { keys: 'Ctrl/Cmd + E', label: 'Exporter' },
                 { keys: 'Ctrl/Cmd + +/-', label: 'Zoom avant / arrière' },
                 { keys: 'Ctrl/Cmd + 0', label: 'Réinitialiser le zoom' },

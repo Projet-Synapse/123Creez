@@ -14,6 +14,9 @@ import { captureRef } from 'react-native-view-shot';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
 import { CanvasArt, buildSvgPath } from '@/components/feature/CanvasArt';
+import { scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible, meetFitRect } from '@/services/gestureMath';
+import { capturePixelSnapshot } from '@/services/pixelSnapshot';
+import PixelatedView from '@/components/feature/PixelatedView';
 
 function getStrokeLinecap(tool: string): 'round' | 'square' | 'butt' {
   if (tool === 'pencil') return 'square';
@@ -204,6 +207,20 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
+  // Vue pixélisée : on ne garde en état React que le franchissement du seuil
+  // de zoom (booléen) et le fait qu'un geste est en cours — jamais le zoom
+  // continu, pour ne pas re-rendre le canevas à chaque mouvement de pinch.
+  const [zoomForPixel, setZoomForPixel] = useState(1);
+  const notePixelZoom = useCallback((z: number) => {
+    // Arrondi à 0.5 près : quelques rendus par geste au plus, et seulement
+    // si la vue pixélisée est choisie.
+    if (settingsRef.current.zoomRendering !== 'pixelated') return;
+    setZoomForPixel(Math.round(z * 2) / 2);
+  }, []);
+  const notePixelZoomRef = useRef(notePixelZoom);
+  notePixelZoomRef.current = notePixelZoom;
+  const [pixelGesture, setPixelGesture] = useState(false);
+  const setPixelGestureRef = useRef(setPixelGesture);
 
   // Zoom around a given point (in local/canvas-container coordinates) while
   // keeping that point visually fixed — used by both wheel-zoom (anchored at
@@ -223,6 +240,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     lastTranslateX.current = newTX;
     lastTranslateY.current = newTY;
     onZoomChangeRef.current?.(Math.round(newScale * 100));
+    notePixelZoomRef.current(newScale);
   }, [scale, translateX, translateY]);
 
   const resetZoomInternal = useCallback(() => {
@@ -233,6 +251,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     lastTranslateX.current = 0;
     lastTranslateY.current = 0;
     onZoomChangeRef.current?.(100);
+    notePixelZoomRef.current(1);
   }, [scale, translateX, translateY]);
 
   // Mouse wheel: plain scroll pans the canvas, Ctrl/Cmd+scroll zooms toward
@@ -251,13 +270,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       const localY = rect ? e.clientY - rect.top : height / 2;
 
       if (e.ctrlKey || e.metaKey) {
-        const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+        const factor = scaleZoomStep(e.deltaY < 0 ? 1.08 : 1 / 1.08, settingsRef.current.zoomSensitivity);
         zoomBy(factor, localX, localY);
         return;
       }
 
-      const newTX = lastTranslateX.current - e.deltaX;
-      const newTY = lastTranslateY.current - e.deltaY;
+      const newTX = lastTranslateX.current - scalePan(e.deltaX, settingsRef.current.panSensitivity);
+      const newTY = lastTranslateY.current - scalePan(e.deltaY, settingsRef.current.panSensitivity);
       translateX.value = newTX;
       translateY.value = newTY;
       lastTranslateX.current = newTX;
@@ -279,6 +298,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       const prevTY = lastTranslateY.current;
       const needsReset = prevScale !== 1 || prevTX !== 0 || prevTY !== 0;
       const hideChecker = transparentBg === true && format === 'png';
+      // La vue pixélisée n'est qu'un affichage : jamais dans l'export.
+      setPixelSuppressed(true);
 
       if (needsReset) {
         scale.value = 1;
@@ -292,8 +313,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       }
 
       // Le damier disparaît le temps de la capture (un re-render suffit).
-      if (hideChecker) {
-        setHideCheckerForCapture(true);
+      if (hideChecker || pixelVisibleRef.current) {
+        if (hideChecker) setHideCheckerForCapture(true);
         await new Promise(resolve => setTimeout(resolve, 80));
       }
 
@@ -307,6 +328,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         return null;
       } finally {
         if (hideChecker) setHideCheckerForCapture(false);
+        setPixelSuppressed(false);
         if (needsReset) {
           scale.value = prevScale;
           translateX.value = prevTX;
@@ -371,6 +393,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderGrant: (evt) => {
         const touches = evt.nativeEvent.touches;
+        // Pendant un geste, la vue lisse (Svg en direct) est affichée.
+        if (settingsRef.current.zoomRendering === 'pixelated') setPixelGestureRef.current(true);
 
         gestureInfo.current = {
           start: Date.now(),
@@ -515,15 +539,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           const mid = getMidpointPage(touches);
 
           if (pinchStartDistance.current > 0) {
+            const ratio = scalePinchRatio(newDist / pinchStartDistance.current, settingsRef.current.zoomSensitivity);
             const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
-              pinchStartScale.current * (newDist / pinchStartDistance.current)));
+              pinchStartScale.current * ratio));
             scale.value = newScale;
             lastScale.current = newScale;
             onZoomChangeRef.current?.(Math.round(newScale * 100));
           }
 
-          const dx = mid.x - panStartX.current;
-          const dy = mid.y - panStartY.current;
+          const dx = scalePan(mid.x - panStartX.current, settingsRef.current.panSensitivity);
+          const dy = scalePan(mid.y - panStartY.current, settingsRef.current.panSensitivity);
           const newTX = panLastTX.current + dx;
           const newTY = panLastTY.current + dy;
           translateX.value = newTX;
@@ -621,6 +646,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       },
 
       onPanResponderRelease: () => {
+        setPixelGestureRef.current(false);
+        notePixelZoomRef.current(lastScale.current);
         // Tap multi-doigts (court, immobile) : 2 doigts annulent, 3 rétablissent.
         const g = gestureInfo.current;
         const dur = Date.now() - g.start;
@@ -668,6 +695,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       },
 
       onPanResponderTerminate: () => {
+        setPixelGestureRef.current(false);
+        notePixelZoomRef.current(lastScale.current);
         isPinching.current = false;
         isDrawing.current = false;
         endStrokeRef.current();
@@ -704,6 +733,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // Pendant une capture (export), le damier est masqué : le PNG garde une
   // transparence réelle au lieu de figer la représentation à l'écran.
   const [hideCheckerForCapture, setHideCheckerForCapture] = useState(false);
+  const [pixelSuppressed, setPixelSuppressed] = useState(false);
+  const pixelVisibleRef = useRef(false);
   // Outil Formes : fantôme de la forme en cours de tracé (coords toile).
   const [shapePreview, setShapePreview] = useState<{ kind: 'line' | 'rect' | 'ellipse'; x: number; y: number; w: number; h: number } | null>(null);
   const shapeStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -738,6 +769,45 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const activeLayers = layers.filter(l => l.id === activeLayerId);
   const floating = !!selection && (selection.offset.x !== 0 || selection.offset.y !== 0);
 
+  // ─── Vue pixélisée (affichage seul) ───────────────────────────────
+  // Un instantané raster du Svg, à raison d'un pixel par pixel de document,
+  // est agrandi sans lissage par-dessus le Svg quand le zoom dépasse le
+  // seuil. Pendant un geste (tracé, pinch…) on revient au Svg en direct.
+  const svgWrapRef = useRef<View>(null);
+  const [pixelSnap, setPixelSnap] = useState<string | null>(null);
+  const docW = contentSize?.width ?? width;
+  const docH = contentSize?.height ?? height;
+  const pixelMode = settings.zoomRendering ?? 'smooth';
+  const pixelEligible = pixelViewEligible(pixelMode, zoomForPixel, docW, docH) && width > 0 && height > 0;
+  // Le contenu change → l'instantané est périmé (on n'affiche jamais un
+  // ancien état du dessin, quitte à montrer la vue lisse un instant).
+  useEffect(() => {
+    setPixelSnap(null);
+  }, [layers, selection, width, height, docW, docH, transparentBg, hideCheckerForCapture, settings.canvasBg, settings.showGrid, pixelMode]);
+  useEffect(() => {
+    if (!pixelEligible || pixelGesture || pixelSuppressed || pixelSnap) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const fit = meetFitRect(width, height, docW, docH);
+      const outW = Math.max(1, Math.round(width / fit.k));
+      const outH = Math.max(1, Math.round(height / fit.k));
+      try {
+        const snap = await capturePixelSnapshot(svgWrapRef.current, outW, outH);
+        if (!cancelled && snap) setPixelSnap(snap);
+      } catch {
+        // Échec de capture : on reste simplement en vue lisse.
+      }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [pixelEligible, pixelGesture, pixelSuppressed, pixelSnap, width, height, docW, docH]);
+  // Mode remis sur « lisse » ou zoom repassé sous le seuil : la mémoire de
+  // l'instantané est libérée.
+  useEffect(() => {
+    if (!pixelEligible) setPixelSnap(null);
+  }, [pixelEligible]);
+  const showPixel = pixelEligible && !pixelGesture && !pixelSuppressed && !!pixelSnap;
+  pixelVisibleRef.current = showPixel;
+
   if (width <= 0 || height <= 0) return null;
 
   // Coordonnées LOGIQUES = la toile (meta). Le viewBox du Svg mappe la toile
@@ -758,6 +828,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       {...panResponder.panHandlers}
     >
       <Animated.View style={[{ width, height }, animatedStyle]}>
+        <View ref={svgWrapRef} collapsable={false} style={{ width, height }}>
         <Svg
           width={width}
           height={height}
@@ -918,6 +989,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
             />
           )}
         </Svg>
+        </View>
+        {showPixel && pixelSnap && (
+          <PixelatedView source={pixelSnap} width={width} height={height} />
+        )}
       </Animated.View>
     </View>
   );

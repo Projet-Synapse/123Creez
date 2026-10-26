@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2020",
+    "strict": true,
+    "esModuleInterop": true,
+    "types": [],
+    "outDir": ".test-dist",
+    "rootDir": ".",
+    "skipLibCheck": true
+  },
+  "include": ["services/__tests__/**/*.ts"]
+}

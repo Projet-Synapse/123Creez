@@ -14,7 +14,7 @@ import { captureRef } from 'react-native-view-shot';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
 import { CanvasArt, buildSvgPath } from '@/components/feature/CanvasArt';
-import { scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible, meetFitRect } from '@/services/gestureMath';
+import { scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible } from '@/services/gestureMath';
 import { capturePixelSnapshot } from '@/services/pixelSnapshot';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
@@ -226,6 +226,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   }, []);
   const notePixelZoomRef = useRef(notePixelZoom);
   notePixelZoomRef.current = notePixelZoom;
+  // Passage en mode « pixélisé » alors qu'on est déjà zoomé : notePixelZoom
+  // n'est appelé qu'à la fin d'un geste, donc on relit le zoom courant ici.
+  const zoomRenderingMode = settings.zoomRendering;
+  useEffect(() => {
+    if (zoomRenderingMode === 'pixelated') setZoomForPixel(Math.round(lastScale.current * 2) / 2);
+  }, [zoomRenderingMode]);
   const [pixelGesture, setPixelGesture] = useState(false);
 
   // ─── Outil Mesure (surcouche d'affichage, état LOCAL) ─────────────
@@ -924,11 +930,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     if (!pixelEligible || pixelGesture || pixelSuppressed || pixelSnap) return;
     let cancelled = false;
     const t = setTimeout(async () => {
-      const fit = meetFitRect(width, height, docW, docH);
-      const outW = Math.max(1, Math.round(width / fit.k));
-      const outH = Math.max(1, Math.round(height / fit.k));
       try {
-        const snap = await capturePixelSnapshot(svgWrapRef.current, outW, outH);
+        // Natif : capture à la taille native, réduite en Nearest dans
+        // PixelatedView. Web : la toile à docW × docH, sans lissage.
+        const snap = await capturePixelSnapshot(svgWrapRef.current, docW, docH);
         if (!cancelled && snap) setPixelSnap(snap);
       } catch {
         // Échec de capture : on reste simplement en vue lisse.
@@ -1165,10 +1170,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           )}
         </Svg>
         </View>
-        {showPixel && pixelSnap && (
-          <PixelatedView source={pixelSnap} width={width} height={height} />
-        )}
       </Animated.View>
+      {/* Vue pixélisée dans l'ESPACE ÉCRAN : le zoom est appliqué en Nearest
+          par PixelatedView (jamais par le scale natif, qui lisse). Sous la
+          surcouche Mesure, qui reste au-dessus. */}
+      {showPixel && pixelSnap && (
+        <PixelatedView
+          source={pixelSnap} width={width} height={height} docW={docW} docH={docH}
+          translateX={translateX} translateY={translateY} scale={scale}
+        />
+      )}
       {/* Outil Mesure : hors de la vue zoomée (taille constante à l'écran),
           hors de l'instantané pixélisé, masqué pendant l'export. */}
       {activeTool === 'measure' && !pixelSuppressed && measure && (

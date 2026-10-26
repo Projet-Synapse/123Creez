@@ -18,7 +18,7 @@ import {
   readImageSize, buildImageLayer,
 } from '@/services/vaultFolderService';
 import { desktop } from '@/services/platform';
-import { recordTombstone, autoPush } from '@/services/supabaseService';
+import { recordTombstone, autoPush, syncNow, getSupabaseClient } from '@/services/supabaseService';
 
 interface VaultContextType {
   canvases: CanvasMeta[];
@@ -68,6 +68,33 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // Synchro par compte : tirer les toiles du compte au démarrage et à chaque
+  // connexion (avant, seule une sauvegarde locale déclenchait une synchro,
+  // donc un appareil neuf ne recevait jamais les toiles du téléphone).
+  useEffect(() => {
+    let cancelled = false;
+    let running = false; // SIGNED_IN peut se répéter (retour d'onglet, refresh)
+    const pull = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const result = await syncNow().catch(() => null);
+        if (!cancelled && result?.ok && result.pulled > 0) await reload();
+      } finally {
+        running = false;
+      }
+    };
+    pull();
+    let unsub: (() => void) | undefined;
+    try {
+      const { data } = getSupabaseClient().auth.onAuthStateChange((event) => {
+        if (event === 'SIGNED_IN') pull();
+      });
+      unsub = () => data.subscription.unsubscribe();
+    } catch { /* Supabase non configuré */ }
+    return () => { cancelled = true; unsub?.(); };
+  }, [reload]);
 
   // Push Supabase automatique, débattu (une rafale de sauvegardes = un push).
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

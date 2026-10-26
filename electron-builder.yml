@@ -13,6 +13,7 @@ directories:
 files:
   - main.js
   - preload.js
+  - auth.js
   - package.json
   - renderer/**/*
 

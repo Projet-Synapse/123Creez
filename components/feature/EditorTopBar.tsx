@@ -5,7 +5,18 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
 
+/** Bouton d'outil dédié dans la barre du haut (Mesure, bientôt Filtres…). */
+export interface TopBarToolButton {
+  key: string;
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+  label: string;
+  active?: boolean;
+  onPress: () => void;
+}
+
 interface Props {
+  /** Boutons d'outils dédiés, affichés dans l'ordre, avant l'aide. */
+  toolButtons?: TopBarToolButton[];
   canvasName: string;
   isDirty: boolean;
   onBack: () => void;
@@ -17,7 +28,7 @@ interface Props {
   onToggleTransparentBg?: () => void;
 }
 
-const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onExport, onHelp, transparentBg, onToggleTransparentBg }) => {
+const EditorTopBar: React.FC<Props> = ({ toolButtons, canvasName, isDirty, onBack, onExport, onHelp, transparentBg, onToggleTransparentBg }) => {
   const { activeTool, activeColor, brushSize } = useCanvas();
   const { theme, settings } = useTheme();
   const { width } = useWindowDimensions();
@@ -27,7 +38,7 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onExport, 
 
   const toolLabels: Record<string, string> = {
     brush: 'Pinceau', pencil: 'Crayon', eraser: 'Gomme', fill: 'Remplir',
-    lasso: 'Lasso', move: 'Déplacer',
+    lasso: 'Lasso', move: 'Déplacer', measure: 'Mesure',
   };
 
   return (
@@ -82,6 +93,21 @@ const EditorTopBar: React.FC<Props> = ({ canvasName, isDirty, onBack, onExport, 
           />
         </Pressable>
       )}
+
+      {/* Outils dédiés (zone extensible : ajouter une entrée à toolButtons) */}
+      {toolButtons?.map(b => (
+        <Pressable
+          key={b.key}
+          style={({ pressed }) => [styles.helpBtn, { backgroundColor: b.active ? theme.accent : theme.surfaceHigh }, pressed && { opacity: 0.7 }]}
+          onPress={b.onPress}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={b.label}
+          accessibilityState={{ selected: !!b.active }}
+        >
+          <MaterialCommunityIcons name={b.icon} size={18} color={b.active ? '#0d0d0d' : theme.textSecondary} />
+        </Pressable>
+      ))}
 
       {/* Help / keyboard shortcuts */}
       {onHelp && (

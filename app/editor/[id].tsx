@@ -128,6 +128,9 @@ export default function EditorScreen() {
     });
   }, [id]);
 
+  // Bouton Mesure : un 2e appui rend l'outil d'avant.
+  const toolBeforeMeasureRef = useRef<Tool>('brush');
+
   // ─── Sauvegarde automatique (il n'y a plus de bouton « Sauvegarder ») ──
   // Toujours actives, quel que soit le réglage d'intervalle :
   //  - après chaque trait/action : AUTOSAVE_DEBOUNCE_MS après la dernière modif ;
@@ -386,6 +389,16 @@ export default function EditorScreen() {
 
       {!fullDraw && (
         <EditorTopBar
+          toolButtons={[
+            {
+              key: 'measure', icon: 'ruler', label: 'Mesure',
+              active: activeTool === 'measure',
+              onPress: () => {
+                if (activeTool === 'measure') setActiveTool(toolBeforeMeasureRef.current);
+                else { toolBeforeMeasureRef.current = activeTool; setActiveTool('measure'); }
+              },
+            },
+          ]}
           canvasName={canvasName}
           isDirty={isDirty}
           onBack={handleBack}

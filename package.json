@@ -1,7 +1,7 @@
 {
   "name": "onspace-app",
   "main": "expo-router/entry",
-  "version": "1.0.20",
+  "version": "1.0.21-test.1",
   "author": "Catelyn2332",
   "scripts": {
     "start": "expo start",

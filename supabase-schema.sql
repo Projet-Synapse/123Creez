@@ -70,3 +70,8 @@ create policy "owner folders" on app_123creez.folders
   for all to authenticated
   using (owner_id = auth.uid())
   with check (owner_id = auth.uid());
+
+-- Droits du rôle connecté (voir supabase/migrations/20261026_app_123creez_grants.sql).
+grant usage on schema app_123creez to authenticated;
+grant select, insert, update, delete on app_123creez.canvases to authenticated;
+grant select, insert, update, delete on app_123creez.folders to authenticated;

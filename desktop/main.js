@@ -4,7 +4,7 @@
 // production it is served over a custom `app://` scheme rather than file://,
 // because expo-router's client-side routing needs absolute paths and a real
 // origin (localStorage, which holds the vault and settings, is per-origin).
-const { app, BrowserWindow, ipcMain, shell, protocol, Notification, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, protocol, Notification, dialog, Menu } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { autoUpdater } = require('electron-updater');
@@ -120,8 +120,42 @@ function registerAppProtocol() {
   });
 }
 
+// ── Barre de menu ───────────────────────────────────────────────────────────
+// Pas de barre « File / Edit / View… » sous Windows et Linux. Sans menu,
+// Chromium gère toujours nativement copier / couper / coller / annuler /
+// tout sélectionner dans les champs. Sous macOS, ces raccourcis (Cmd+C…)
+// passent PAR le menu : on garde un menu minimal (app + Édition) invisible
+// dans la fenêtre puisque macOS l'affiche dans la barre système.
+function installMenu() {
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }]));
+  } else {
+    Menu.setApplicationMenu(null);
+  }
+}
+
+// Outils de dev sans menu : F12 / Ctrl+Shift+I (Cmd+Alt+I) et Ctrl+R en dev
+// uniquement ; rien n'est exposé dans la version installée.
+function attachDevShortcuts(win) {
+  if (!isDev) return;
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = String(input.key || '').toLowerCase();
+    const mod = input.control || input.meta;
+    if (key === 'f12' || (mod && input.shift && key === 'i') || (input.meta && input.alt && key === 'i')) {
+      win.webContents.toggleDevTools();
+      event.preventDefault();
+    } else if (mod && key === 'r') {
+      win.webContents.reload();
+      event.preventDefault();
+    }
+  });
+}
+
 function createWindow() {
+  installMenu();
   mainWindow = new BrowserWindow({
+    autoHideMenuBar: true,
     width: 1360,
     height: 860,
     minWidth: 960,
@@ -137,6 +171,8 @@ function createWindow() {
     },
   });
 
+  if (process.platform !== 'darwin') mainWindow.removeMenu();
+  attachDevShortcuts(mainWindow);
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
   // Anything that tries to open a new window goes to the real browser instead.

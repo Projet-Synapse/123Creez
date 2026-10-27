@@ -660,7 +660,7 @@ export default function SettingsScreen() {
             <View style={styles.welcomeState}>
               <MaterialCommunityIcons name="cog-outline" size={48} color={theme.textMuted} />
               <Text style={styles.welcomeTitle}>Paramètres</Text>
-              <Text style={styles.welcomeDesc}>Sélectionnez une catégorie à gauche pour personnaliser PaintStudio.</Text>
+              <Text style={styles.welcomeDesc}>Sélectionnez une catégorie à gauche pour personnaliser 123Créez.</Text>
             </View>
           )}
 

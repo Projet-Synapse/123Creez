@@ -748,7 +748,7 @@ export default function VaultScreen() {
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <MaterialCommunityIcons name="brush-variant" size={22} color={theme.accent} />
-          <Text style={styles.appTitle}>PaintStudio</Text>
+          <Text style={styles.appTitle}>123Créez</Text>
         </View>
         <View style={styles.headerActions}>
           <Pressable

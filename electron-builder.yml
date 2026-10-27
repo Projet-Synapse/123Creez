@@ -3,7 +3,7 @@
 # desktop/package.json holds the (tiny) runtime dependency set that ships.
 appId: com.creez.app
 productName: 123Créez
-copyright: Copyright © 2026 123Créez
+copyright: Copyright © 2026 Catelyn2332
 
 directories:
   app: desktop

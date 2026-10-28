@@ -5,7 +5,7 @@
     "version": "1.0.21-test.1",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
-    "scheme": "onspaceapp",
+    "scheme": ["onspaceapp", "app123creez"],
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {

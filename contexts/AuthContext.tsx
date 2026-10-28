@@ -10,7 +10,10 @@ import type { Session } from '@supabase/supabase-js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { getSupabaseClient, parseAuthCallbackUrl } from '@/services/supabaseService';
-import { isDesktop, desktop } from '@/services/platform';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+
+import { isDesktop, desktop, isNative } from '@/services/platform';
 
 const REDIRECT_TO = 'app123creez://auth-callback';
 
@@ -29,7 +32,9 @@ type AuthContextValue = {
 const AuthReactContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const available = isDesktop() && !!desktop()?.auth;
+  // Desktop : pont Electron. Android/iOS : navigateur in-app (expo-web-browser)
+  // + retour par le scheme app123creez:// (déclaré dans app.json).
+  const available = (isDesktop() && !!desktop()?.auth) || isNative();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(available);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +130,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, [exchangeCallbackUrl]);
 
+  // Mobile : filet de sécurité si le retour arrive par un lien (démarrage à
+  // froid ou navigateur qui ne renvoie pas le résultat) — idempotent.
+  useEffect(() => {
+    if (!isNative()) return;
+    const handle = (url: string | null) => {
+      if (url && url.startsWith(REDIRECT_TO)) exchangeCallbackUrl(url);
+    };
+    void Linking.getInitialURL().then(handle).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => handle(url));
+    return () => sub.remove();
+  }, [exchangeCallbackUrl]);
+
   const signInWithGoogle = useCallback(async () => {
+    if (isNative()) {
+      setError(null);
+      try {
+        const { data, error: oauthError } = await getSupabaseClient().auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: REDIRECT_TO, skipBrowserRedirect: true },
+        });
+        if (oauthError) throw oauthError;
+        if (!data.url) throw new Error('Supabase n’a pas renvoyé d’URL de connexion.');
+        const result = await WebBrowser.openAuthSessionAsync(data.url, REDIRECT_TO);
+        if (result.type === 'success' && result.url) exchangeCallbackUrl(result.url);
+      } catch (err) {
+        console.error('[auth] échec du lancement de la connexion :', err);
+        setError(String((err as Error)?.message ?? err));
+      }
+      return;
+    }
     const bridge = isDesktop() ? desktop()?.auth : undefined;
     if (!bridge) return;
     setError(null);
@@ -144,7 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('[auth] échec du lancement de la connexion :', err);
       setError(String((err as Error)?.message ?? err));
     }
-  }, []);
+  }, [exchangeCallbackUrl]);
 
   const signOut = useCallback(async () => {
     setError(null);

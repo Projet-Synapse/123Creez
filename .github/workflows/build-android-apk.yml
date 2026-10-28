@@ -85,6 +85,18 @@ jobs:
       - name: Installer la clé de signature
         run: cp scripts/android/creez.keystore android/app/debug.keystore
 
+      # Maven Central coupait parfois le téléchargement de hermes-android
+      # (« Read timed out ») : délais HTTP Gradle allongés + essais multiples.
+      - name: Délais réseau Gradle
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<'PROPS'
+          systemProp.org.gradle.internal.http.socketTimeout=300000
+          systemProp.org.gradle.internal.http.connectionTimeout=120000
+          systemProp.org.gradle.internal.repository.max.retries=8
+          systemProp.org.gradle.internal.repository.initial.backoff=2000
+          PROPS
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:

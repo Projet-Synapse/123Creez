@@ -680,6 +680,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         // Appui long → pipette (outils de tracé uniquement).
         clearLongPressRef.current();
         longPressFired.current = false;
+        if (settingsRef.current.longPressEyedropper === false) return;
         longPressStart.current = { x: pageX, y: pageY };
         longPressTimer.current = setTimeout(() => {
           longPressTimer.current = null;

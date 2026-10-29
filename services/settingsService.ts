@@ -27,6 +27,7 @@ export interface AppSettings {
   /** Gestes de la zone de dessin (style IbisPaint). */
   undoTwoFingerTap: boolean;
   redoThreeFingerTap: boolean;
+  longPressEyedropper: boolean;  // Appui long sur la toile = pipette
   /** Sélection d'outils : barre latérale fixe ou popup repliable. */
   toolbarMode: 'bar' | 'popup';
   gyroCorrection: boolean;
@@ -82,6 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   shapeKind: 'line',
   undoTwoFingerTap: true,
   redoThreeFingerTap: true,
+  longPressEyedropper: true,
   toolbarMode: 'bar',
   gyroCorrection: false,
   panSensitivity: 1,

@@ -63,7 +63,16 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
       </View>
 
       {/* Panel content */}
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      {/* Barre de défilement visible (bureau) et persistante (Android) quand
+          le contenu dépasse — les panneaux internes ne défilent plus seuls. */}
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentInner}
+        showsVerticalScrollIndicator
+        persistentScrollbar
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
         {activeTab === 'color' && <ColorPalette />}
         {activeTab === 'brush' && <BrushPanel />}
         {activeTab === 'layers' && <LayerPanel />}
@@ -104,6 +113,9 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentInner: {
+    paddingBottom: 24,
   },
 });
 

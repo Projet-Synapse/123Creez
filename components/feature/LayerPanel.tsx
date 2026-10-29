@@ -148,7 +148,7 @@ const LayerPanel: React.FC = () => {
         </View>
       </View>
 
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+      <View style={styles.list}>
         {layerGroups.map(group => {
           const inGroup = [...layers].reverse().filter(l => l.groupId === group.id);
           return (
@@ -212,7 +212,7 @@ const LayerPanel: React.FC = () => {
             {ungrouped.map(renderLayer)}
           </>
         )}
-      </ScrollView>
+      </View>
     </View>
   );
 };

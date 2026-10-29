@@ -89,7 +89,7 @@ const AutomationPanel: React.FC<Props> = ({ canvasId }) => {
         </View>
       )}
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <View>
         {/* Actions */}
         <View style={styles.actionRow}>
           <Pressable
@@ -136,7 +136,7 @@ const AutomationPanel: React.FC<Props> = ({ canvasId }) => {
         )}
 
         <View style={{ height: 16 }} />
-      </ScrollView>
+      </View>
 
       {/* Templates modal */}
       <Modal visible={showTemplates} transparent animationType="slide">

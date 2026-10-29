@@ -115,7 +115,9 @@ export interface ViewParams { scale: number; tx: number; ty: number; k: number; 
 
 export function viewParams(scale: number, tx: number, ty: number, zoneW: number, zoneH: number, docW: number, docH: number): ViewParams {
   const k = Math.min(zoneW / docW, zoneH / docH);
-  return { scale, tx, ty, k, offX: (zoneW - docW * k) / 2, offY: (zoneH - docH * k) / 2 };
+  // Le scale natif est centré sur la zone : on ramène T à une origine
+  // haut-gauche pour que écran = tx + scale × (…).
+  return { scale, tx: tx + (zoneW / 2) * (1 - scale), ty: ty + (zoneH / 2) * (1 - scale), k, offX: (zoneW - docW * k) / 2, offY: (zoneH - docH * k) / 2 };
 }
 
 export function docToScreen(p: Pt, v: ViewParams): Pt {

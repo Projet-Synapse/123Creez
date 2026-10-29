@@ -29,7 +29,8 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const TOPBAR_HEIGHT = 48;
 const TOOLBAR_WIDTH = 56;
-const BOTTOM_PANEL_HEIGHT = 80;
+// 3 curseurs empilés (style IbisPaint X) : 3 × 36 px + marges.
+const BOTTOM_PANEL_HEIGHT = 124;
 
 export default function EditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -375,7 +376,7 @@ export default function EditorScreen() {
   // Bottom panel expanded height
   const expandedBottomHeight = bottomAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [BOTTOM_PANEL_HEIGHT, 180],
+    outputRange: [BOTTOM_PANEL_HEIGHT, BOTTOM_PANEL_HEIGHT + 100],
   });
 
   const displayColor = activeTool === 'eraser' ? '#ffffff' : activeColor;
@@ -489,6 +490,8 @@ export default function EditorScreen() {
                 }} />
               </View>
 
+              {/* Curseurs empilés les uns au-dessus des autres (pleine largeur) */}
+              <View style={styles.sliderStack}>
               {/* Size slider inline */}
               <View style={styles.sliderBlock}>
                 <Text style={[styles.sliderLabel, { color: theme.textMuted }]}>Taille</Text>
@@ -542,6 +545,8 @@ export default function EditorScreen() {
                   />
                   <Text style={[styles.sliderVal, { color: theme.textSecondary }]}>{Math.round(brushOpacity * 100)}%</Text>
                 </View>
+              </View>
+
               </View>
 
               {/* Expand toggle */}
@@ -800,7 +805,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   bottomCompact: {
-    height: 80,
+    height: BOTTOM_PANEL_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.md,
@@ -811,22 +816,31 @@ const styles = StyleSheet.create({
     borderWidth: 1, alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
   },
-  sliderBlock: {
+  sliderStack: {
     flex: 1,
-    gap: 1,
+    justifyContent: 'center',
+  },
+  // Une ligne par réglage : libellé | curseur pleine largeur | valeur
+  sliderBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 36,
+    gap: 6,
   },
   sliderRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
   },
-  slider: { flex: 1, height: 32 },
+  slider: { flex: 1, height: 36 },
   sliderLabel: {
-    fontSize: 9, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5,
+    fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5,
+    width: 58, flexShrink: 0,
   },
   sliderVal: {
     fontSize: FontSize.xs, fontWeight: '600', fontFamily: 'monospace',
-    width: 36, textAlign: 'right', flexShrink: 0,
+    width: 40, textAlign: 'right', flexShrink: 0,
   },
   expandBtn: {
     width: 36, height: 36, borderRadius: Radius.sm,

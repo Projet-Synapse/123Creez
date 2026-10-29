@@ -12,6 +12,7 @@
 // mono-poste) ; passer à l'auth Google comme 123Ecriture est enregistré
 // dans scores-qualite.md (sécurité).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { remoteFolderWins } from './folderTree';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   getCanvasMetas, getFolders, loadCanvas, saveCanvas, saveFolder,
@@ -329,15 +330,21 @@ async function runSync(): Promise<SyncResult> {
     for (const rf of remoteFolders ?? []) {
       // Dossier supprimé localement pendant le hors-ligne : ne pas ressusciter.
       if (folderTombstones.some(t => t.id === rf.id)) continue;
-      // Les dossiers ne sont pas versionnés : on ne crée que l'absent.
-      if (!folders.some(f => f.id === rf.id)) {
-        await saveFolder({
-          id: rf.id, name: rf.name, parentId: rf.parent_id ?? null, createdAt: toMs(rf.created_at) || toMs(rf.updated_at) || Date.now(),
+      // « Le plus récent gagne » : absent localement, ou modifié ailleurs
+      // (nom, ordre, parent, aperçu) plus récemment que la copie locale.
+      const local = folders.find(f => f.id === rf.id);
+      const remoteMs = toMs(rf.updated_at);
+      if (!local || remoteFolderWins(local.updatedAt ?? local.createdAt, remoteMs)) {
+        const merged: Folder = {
+          id: rf.id, name: rf.name, parentId: rf.parent_id ?? null, createdAt: toMs(rf.created_at) || remoteMs || Date.now(),
           color: rf.color, order: rf.order_index ?? undefined,
           previewMode: rf.preview_mode ?? undefined,
-        });
+          updatedAt: remoteMs || undefined,
+        };
+        await saveFolder(merged);
+        if (local) Object.assign(local, merged);
         pulled++;
-        logSync('reception', `Dossier « ${rf.name} »`);
+        logSync('reception', local ? `Dossier « ${rf.name} » mis à jour` : `Dossier « ${rf.name} »`);
       }
     }
 
@@ -400,7 +407,9 @@ async function runSync(): Promise<SyncResult> {
       created_at: Math.round(f.createdAt), color: f.color, order_index: f.order == null ? null : Math.round(f.order),
       // folders.updated_at est un timestamptz (≠ canvases.updated_at bigint ms) :
       // un nombre ici faisait échouer TOUT l'upsert des dossiers, erreur ignorée.
-      preview_mode: f.previewMode ?? null, updated_at: new Date().toISOString(),
+      // Horodatage RÉEL de la dernière modif (et non « maintenant ») : sinon
+      // chaque appareil écraserait le cloud avec sa copie à chaque synchro.
+      preview_mode: f.previewMode ?? null, updated_at: new Date(Math.round(f.updatedAt ?? f.createdAt)).toISOString(),
     }));
     if (folderRows.length > 0) {
       const { error } = await supabase.schema(SCHEMA).from('folders').upsert(folderRows);

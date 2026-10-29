@@ -47,6 +47,9 @@ export interface Folder {
   order?: number;
   /** How the folder card shows its content (per-folder preference). */
   previewMode?: FolderPreviewMode;
+  /** Dernière modification (ms) : nom, couleur, aperçu, ordre, parent. Sert
+   *  à la synchro « le plus récent gagne » (absent sur les anciens dossiers). */
+  updatedAt?: number;
 }
 
 const KEYS = {
@@ -194,9 +197,24 @@ export async function setFoldersOrder(orderedIds: string[]): Promise<void> {
   const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
   for (const folder of folders) {
     const r = rank.get(folder.id);
-    if (r !== undefined) folder.order = r;
-    await saveFolder(folder);
+    if (r !== undefined && folder.order !== r) {
+      folder.order = r;
+      folder.updatedAt = Date.now();
+    }
   }
+  await AsyncStorage.setItem(KEYS.FOLDERS, JSON.stringify(folders));
+}
+
+/** Range un dossier dans `parentId` (null = racine), en dernière position. */
+export async function setFolderParent(id: string, parentId: string | null, order?: number): Promise<Folder | null> {
+  const folders = await getFolders();
+  const folder = folders.find(f => f.id === id);
+  if (!folder) return null;
+  folder.parentId = parentId;
+  if (order !== undefined) folder.order = order;
+  folder.updatedAt = Date.now();
+  await AsyncStorage.setItem(KEYS.FOLDERS, JSON.stringify(folders));
+  return folder;
 }
 
 export async function setFolderPreviewMode(id: string, mode: FolderPreviewMode): Promise<void> {
@@ -204,6 +222,7 @@ export async function setFolderPreviewMode(id: string, mode: FolderPreviewMode):
   const folder = folders.find(f => f.id === id);
   if (!folder) return;
   folder.previewMode = mode;
+  folder.updatedAt = Date.now();
   await saveFolder(folder);
 }
 

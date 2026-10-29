@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import {
   View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
-  Modal, TextInput, Pressable,
+  Modal, TextInput, Pressable, Text,
 } from 'react-native';
 import Svg, {
   Rect, Line, Circle, Ellipse, Defs, Mask, Polyline, Polygon, G, Path,
@@ -249,6 +249,34 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const snapOptsRef = useRef({ snap15, snapEnds });
   snapOptsRef.current = { snap15, snapEnds };
   const shiftDownRef = useRef(false);
+  const altDownRef = useRef(false);
+  // ─── Appui long = pipette ─────────────────────────────────────────
+  // ~500 ms immobile (tolérance quelques px) avec un outil de tracé : le
+  // début de trait est annulé (aucun trait parasite) et la couleur sous le
+  // doigt devient la couleur courante. Un 2e doigt ou un mouvement annule.
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStart = useRef<{ x: number; y: number } | null>(null);
+  const longPressFired = useRef(false);
+  const [pickFeedback, setPickFeedback] = useState<{ x: number; y: number; color: string | null } | null>(null);
+  const pickFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearLongPress = useCallback(() => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
+    longPressStart.current = null;
+  }, []);
+  const clearLongPressRef = useRef(clearLongPress);
+  clearLongPressRef.current = clearLongPress;
+  const showPickFeedback = useCallback((x: number, y: number, color: string | null) => {
+    if (pickFeedbackTimer.current) clearTimeout(pickFeedbackTimer.current);
+    setPickFeedback({ x, y, color });
+    pickFeedbackTimer.current = setTimeout(() => setPickFeedback(null), 900);
+  }, []);
+  const showPickFeedbackRef = useRef(showPickFeedback);
+  showPickFeedbackRef.current = showPickFeedback;
+  useEffect(() => () => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    if (pickFeedbackTimer.current) clearTimeout(pickFeedbackTimer.current);
+  }, []);
   const measureDragRef = useRef<{ key: 'a' | 'b' | 'v'; before: Measure | null; fresh: boolean } | null>(null);
   const [, setMeasureViewTick] = useState(0);
   const measureRafRef = useRef<number | null>(null);
@@ -530,6 +558,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           isDrawing.current = false;
           // Un deuxième doigt = pinch/pan : le fragment tracé par le premier
           // doigt est JETÉ (pas commité) — c'est une tentative de traçage.
+          clearLongPressRef.current();
           cancelStrokeRef.current();
           cancelLassoRef.current();
           measureEndRef.current(true);
@@ -635,9 +664,36 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           return;
         }
 
+        // Alt+clic (desktop) : pipette immédiate, sans trait.
+        if (altDownRef.current) {
+          const c = toCanvasCoords(pageX, pageY);
+          const col = eyedropColorRef.current(c.x, c.y);
+          if (col) setActiveColorRef.current(col);
+          const layout = containerLayout.current;
+          showPickFeedbackRef.current(layout ? pageX - layout.x : pageX, layout ? pageY - layout.y : pageY, col);
+          return;
+        }
+
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
         beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
+        // Appui long → pipette (outils de tracé uniquement).
+        clearLongPressRef.current();
+        longPressFired.current = false;
+        longPressStart.current = { x: pageX, y: pageY };
+        longPressTimer.current = setTimeout(() => {
+          longPressTimer.current = null;
+          const st = longPressStart.current;
+          if (!st || !isDrawing.current || isPinching.current) return;
+          longPressFired.current = true;
+          isDrawing.current = false;
+          cancelStrokeRef.current();
+          const pc = toCanvasCoords(st.x, st.y);
+          const col = eyedropColorRef.current(pc.x, pc.y);
+          if (col) setActiveColorRef.current(col);
+          const layout = containerLayout.current;
+          showPickFeedbackRef.current(layout ? st.x - layout.x : st.x, layout ? st.y - layout.y : st.y, col);
+        }, LONG_PRESS_MS);
       },
 
       onPanResponderMove: (evt) => {
@@ -653,6 +709,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           if (!isPinching.current) {
             isPinching.current = true;
             isDrawing.current = false;
+            clearLongPressRef.current();
             cancelStrokeRef.current();
             cancelLassoRef.current();
             measureEndRef.current(true);
@@ -692,6 +749,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         if (!isDrawing.current) return;
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
+        const lp = longPressStart.current;
+        if (lp && Math.hypot(pageX - lp.x, pageY - lp.y) > LONG_PRESS_TOLERANCE_PX) clearLongPressRef.current();
 
         if (tool === 'measure') {
           measureMoveRef.current(pageX, pageY);
@@ -783,6 +842,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderRelease: () => {
         setPixelGestureRef.current(false);
+        clearLongPressRef.current();
+        if (longPressFired.current) { longPressFired.current = false; isDrawing.current = false; return; }
         notePixelZoomRef.current(lastScale.current);
         // Tap multi-doigts (court, immobile) : 2 doigts annulent, 3 rétablissent.
         const g = gestureInfo.current;
@@ -836,6 +897,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderTerminate: () => {
         setPixelGestureRef.current(false);
+        clearLongPressRef.current();
+        longPressFired.current = false;
         notePixelZoomRef.current(lastScale.current);
         isPinching.current = false;
         isDrawing.current = false;
@@ -949,7 +1012,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // Shift (desktop) = magnétisme 15° temporaire.
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-    const on = (e: KeyboardEvent) => { shiftDownRef.current = e.shiftKey; };
+    const on = (e: KeyboardEvent) => { shiftDownRef.current = e.shiftKey; altDownRef.current = e.altKey; };
     window.addEventListener('keydown', on);
     window.addEventListener('keyup', on);
     return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on); };
@@ -1185,6 +1248,21 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       {activeTool === 'measure' && !pixelSuppressed && measure && (
         <MeasureGraphics measure={measure} view={viewParams(lastScale.current, lastTranslateX.current, lastTranslateY.current, width, height, docW, docH)} width={width} height={height} />
       )}
+      {/* Retour visuel de la pipette (appui long / Alt+clic) : pastille de la
+          couleur prélevée au-dessus du doigt. Affichage seul. */}
+      {pickFeedback && !pixelSuppressed && (
+        <View
+          pointerEvents="none"
+          style={[pickStyles.bubble, {
+            left: pickFeedback.x - 28,
+            top: Math.max(4, pickFeedback.y - 92),
+            backgroundColor: pickFeedback.color ?? 'transparent',
+            borderColor: theme.surfaceBorder,
+          }]}
+        >
+          {!pickFeedback.color && <Text style={pickStyles.none}>∅</Text>}
+        </View>
+      )}
       {activeTool === 'measure' && !pixelSuppressed && (
         <MeasurePanel
           accent={theme.accent}
@@ -1204,6 +1282,19 @@ DrawingCanvas.displayName = 'DrawingCanvas';
 
 const styles = StyleSheet.create({
   container: { overflow: 'hidden' },
+});
+
+/** Appui long → pipette : délai et tolérance de mouvement. */
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_TOLERANCE_PX = 8;
+
+const pickStyles = StyleSheet.create({
+  bubble: {
+    position: 'absolute', width: 56, height: 56, borderRadius: 28, borderWidth: 3,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 6,
+  },
+  none: { fontSize: 22, color: '#888' },
 });
 
 export default React.memo(DrawingCanvas);

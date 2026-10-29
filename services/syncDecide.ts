@@ -44,3 +44,24 @@ export function conflictCopyName(name: string, side: 'locale' | 'distante', at: 
   const p = (n: number) => String(n).padStart(2, '0');
   return `${name} (conflit ${side} ${p(at.getDate())}/${p(at.getMonth() + 1)} ${p(at.getHours())}:${p(at.getMinutes())})`;
 }
+
+/** Horodatage → ms (accepte bigint ms, chaîne numérique ou timestamptz ISO). */
+export function toMs(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    if (/^\d+$/.test(v)) return Number(v);
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
+
+/**
+ * Dossier effectif d'une toile pour l'affichage : si son dossier n'existe pas
+ * (encore) localement — p. ex. toile reçue avant son dossier — elle s'affiche
+ * à la racine au lieu d'être invisible. Elle retrouve son dossier dès qu'il arrive
+ * (le folderId stocké n'est pas modifié).
+ */
+export function effectiveFolderId(folderId: string | null | undefined, existing: ReadonlySet<string>): string | null {
+  return folderId && existing.has(folderId) ? folderId : null;
+}

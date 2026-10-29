@@ -96,6 +96,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       if (prevPhase === 'syncing' && st.phase !== 'syncing' && !cancelled) reload();
       prevPhase = st.phase;
     });
+    // Re-tirer régulièrement (2 min) tant que l'app est au premier plan : un PC
+    // resté ouvert voit ainsi arriver les toiles du téléphone.
+    const poll = setInterval(() => { if (AppState.currentState === 'active') pull(); }, 120_000);
     const appSub = AppState.addEventListener('change', (st) => { if (st === 'active') pull(); });
     let unsub: (() => void) | undefined;
     try {
@@ -104,7 +107,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       });
       unsub = () => data.subscription.unsubscribe();
     } catch { /* Supabase non configuré */ }
-    return () => { cancelled = true; unsub?.(); appSub.remove(); unsubStatus(); };
+    return () => { cancelled = true; unsub?.(); appSub.remove(); unsubStatus(); clearInterval(poll); };
   }, [reload]);
 
   // Push Supabase automatique, débattu (une rafale de sauvegardes = un push).

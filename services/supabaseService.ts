@@ -18,7 +18,7 @@ import {
   deleteCanvas as storageDeleteCanvas, deleteFolder as storageDeleteFolder,
   CanvasMeta, Folder, CanvasData,
 } from '@/services/vaultService';
-import { decideCanvas, retryDelayMs, isPermanentSyncError, conflictCopyName } from '@/services/syncDecide';
+import { toMs, decideCanvas, retryDelayMs, isPermanentSyncError, conflictCopyName } from '@/services/syncDecide';
 import { logSync, setSyncStatus, getPause, setPause, clearPause } from '@/services/syncLog';
 import { LayerGroup } from '@/contexts/CanvasContext';
 
@@ -168,19 +168,23 @@ export async function recordTombstone(kind: 'canvas' | 'folder', id: string): Pr
 }
 
 function rowFromCanvas(data: CanvasData, meta: CanvasMeta) {
+  // Types alignés sur le schéma réel app_123creez.canvases : created_at,
+  // updated_at, thumb_at = bigint (ms entiers) ; synced_at = timestamptz.
+  const int = (n: number | undefined | null) => (n == null || !Number.isFinite(n) ? null : Math.round(n));
   return {
     id: meta.id,
     name: meta.name,
-    folder_id: meta.folderId,
-    created_at: meta.createdAt,
-    updated_at: meta.updatedAt,
-    width: meta.width,
-    height: meta.height,
+    folder_id: meta.folderId ?? null,
+    created_at: int(meta.createdAt),
+    updated_at: int(meta.updatedAt),
+    width: int(meta.width),
+    height: int(meta.height),
     thumbnail_color: meta.thumbnailColor,
-    stroke_count: meta.strokeCount,
+    stroke_count: int(meta.strokeCount),
     thumbnail: meta.thumbnail ?? null,
-    thumb_at: meta.thumbAt ?? null,
-    order_index: meta.order ?? null,
+    thumb_at: int(meta.thumbAt),
+    order_index: int(meta.order),
+    synced_at: new Date().toISOString(),
     data,
   };
 }
@@ -193,14 +197,14 @@ function canvasFromRow(row: any): CanvasData | null {
       id: row.id,
       name: row.name,
       folderId: row.folder_id,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: toMs(row.created_at),
+      updatedAt: toMs(row.updated_at),
       width: row.width,
       height: row.height,
       thumbnailColor: row.thumbnail_color,
       strokeCount: row.stroke_count,
       thumbnail: row.thumbnail ?? undefined,
-      thumbAt: row.thumb_at ?? undefined,
+      thumbAt: row.thumb_at != null ? toMs(row.thumb_at) : undefined,
       order: row.order_index ?? undefined,
     },
     layers: row.data.layers,
@@ -328,7 +332,7 @@ async function runSync(): Promise<SyncResult> {
       // Les dossiers ne sont pas versionnés : on ne crée que l'absent.
       if (!folders.some(f => f.id === rf.id)) {
         await saveFolder({
-          id: rf.id, name: rf.name, parentId: rf.parent_id, createdAt: rf.created_at,
+          id: rf.id, name: rf.name, parentId: rf.parent_id ?? null, createdAt: toMs(rf.created_at) || toMs(rf.updated_at) || Date.now(),
           color: rf.color, order: rf.order_index ?? undefined,
           previewMode: rf.preview_mode ?? undefined,
         });
@@ -338,9 +342,9 @@ async function runSync(): Promise<SyncResult> {
     }
 
     for (const rc of remoteCanvases ?? []) {
-      if (canvasTombstones.some(t => t.id === rc.id && t.at >= (rc.updated_at ?? 0))) continue;
+      if (canvasTombstones.some(t => t.id === rc.id && t.at >= toMs(rc.updated_at))) continue;
       const local = metas.find(m => m.id === rc.id);
-      const remoteAt = rc.updated_at ?? 0;
+      const remoteAt = toMs(rc.updated_at);
       const decision = decideCanvas(local?.updatedAt, remoteAt, synced[rc.id]);
       if (decision === 'skip') continue;
       const remoteData = canvasFromRow(rc);
@@ -392,9 +396,11 @@ async function runSync(): Promise<SyncResult> {
     }
 
     const folderRows = folders.map(f => ({
-      id: f.id, owner_id: ownerId, name: f.name, parent_id: f.parentId,
-      created_at: f.createdAt, color: f.color, order_index: f.order ?? null,
-      preview_mode: f.previewMode ?? null, updated_at: Date.now(),
+      id: f.id, owner_id: ownerId, name: f.name, parent_id: f.parentId ?? null,
+      created_at: Math.round(f.createdAt), color: f.color, order_index: f.order == null ? null : Math.round(f.order),
+      // folders.updated_at est un timestamptz (≠ canvases.updated_at bigint ms) :
+      // un nombre ici faisait échouer TOUT l'upsert des dossiers, erreur ignorée.
+      preview_mode: f.previewMode ?? null, updated_at: new Date().toISOString(),
     }));
     if (folderRows.length > 0) {
       const { error } = await supabase.schema(SCHEMA).from('folders').upsert(folderRows);

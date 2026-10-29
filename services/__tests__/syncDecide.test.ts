@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideCanvas, retryDelayMs, isPermanentSyncError, conflictCopyName } from '../syncDecide';
+import { toMs, effectiveFolderId, decideCanvas, retryDelayMs, isPermanentSyncError, conflictCopyName } from '../syncDecide';
 
 test('decideCanvas : toile absente localement → pull', () => {
   assert.equal(decideCanvas(undefined, 100, undefined), 'pull');
@@ -34,4 +34,19 @@ test('isPermanentSyncError', () => {
 });
 test('conflictCopyName', () => {
   assert.equal(conflictCopyName('Chat', 'locale', new Date(2026, 9, 5, 7, 3)), 'Chat (conflit locale 05/10 07:03)');
+});
+
+test('toMs : bigint ms, chaîne, ISO timestamptz', () => {
+  assert.equal(toMs(1792266589110), 1792266589110);
+  assert.equal(toMs('1792266589110'), 1792266589110);
+  assert.equal(toMs('2026-10-29T17:00:00.000Z'), Date.UTC(2026, 9, 29, 17));
+  assert.equal(toMs(null), 0);
+  assert.equal(toMs('n/a'), 0);
+});
+test('effectiveFolderId : dossier orphelin → racine', () => {
+  const ids = new Set(['folder-a']);
+  assert.equal(effectiveFolderId('folder-a', ids), 'folder-a');
+  assert.equal(effectiveFolderId('folder-1793292538161-8727', ids), null);
+  assert.equal(effectiveFolderId(null, ids), null);
+  assert.equal(effectiveFolderId(undefined, ids), null);
 });

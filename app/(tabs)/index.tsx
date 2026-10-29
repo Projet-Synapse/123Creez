@@ -1,4 +1,5 @@
 // Powered by OnSpace.AI
+import { SyncPausedBanner } from '@/components/feature/SyncJournal';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, TextInput,
@@ -743,6 +744,7 @@ export default function VaultScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <StatusBar style={theme.statusBarStyle} />
+      <SyncPausedBanner />
 
       {/* Header */}
       <View style={styles.header}>

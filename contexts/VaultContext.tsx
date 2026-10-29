@@ -18,6 +18,8 @@ import {
   readImageSize, buildImageLayer,
 } from '@/services/vaultFolderService';
 import { desktop } from '@/services/platform';
+import { AppState } from 'react-native';
+import { hydrateSyncStatus, subscribeSyncStatus } from '@/services/syncLog';
 import { recordTombstone, autoPush, syncNow, getSupabaseClient } from '@/services/supabaseService';
 
 interface VaultContextType {
@@ -85,7 +87,16 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         running = false;
       }
     };
-    pull();
+    hydrateSyncStatus().finally(pull);
+    // Retour au premier plan : relancer un cycle (vide la file hors ligne).
+    // Une synchro lancée ailleurs (Reprendre, nouvel essai) peut avoir reçu
+    // des toiles : recharger la liste à chaque fin de cycle.
+    let prevPhase = '';
+    const unsubStatus = subscribeSyncStatus((st) => {
+      if (prevPhase === 'syncing' && st.phase !== 'syncing' && !cancelled) reload();
+      prevPhase = st.phase;
+    });
+    const appSub = AppState.addEventListener('change', (st) => { if (st === 'active') pull(); });
     let unsub: (() => void) | undefined;
     try {
       const { data } = getSupabaseClient().auth.onAuthStateChange((event) => {
@@ -93,7 +104,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       });
       unsub = () => data.subscription.unsubscribe();
     } catch { /* Supabase non configuré */ }
-    return () => { cancelled = true; unsub?.(); };
+    return () => { cancelled = true; unsub?.(); appSub.remove(); unsubStatus(); };
   }, [reload]);
 
   // Push Supabase automatique, débattu (une rafale de sauvegardes = un push).

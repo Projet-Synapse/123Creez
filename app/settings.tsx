@@ -13,6 +13,7 @@ import { SENSITIVITY_MIN, SENSITIVITY_MAX, clampSensitivity } from '@/services/g
 import { useSettingsNavLayout } from '@/hooks/useSettingsNavLayout';
 import { useTheme } from '@/hooks/useTheme';
 import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
+import { SyncJournal, SyncPausedBanner } from '@/components/feature/SyncJournal';
 import { useAlert } from '@/template';
 import { useUpdates } from '@/hooks/useUpdates';
 import ResizeHandle from '@/components/feature/ResizeHandle';
@@ -609,6 +610,7 @@ export default function SettingsScreen() {
           {/* ─── Synchronisation & dossier vault ─── */}
           {activeSection === 'sync' && (
             <View style={styles.section}>
+              <SyncPausedBanner />
               <SectionTitle label="Compte" theme={theme} />
               <Card theme={theme}>
                 <AccountCard />
@@ -622,6 +624,11 @@ export default function SettingsScreen() {
               <SectionTitle label="Synchronisation Supabase" theme={theme} />
               <Card theme={theme}>
                 <SyncSettings />
+              </Card>
+
+              <SectionTitle label="État et journal de synchro" theme={theme} />
+              <Card theme={theme}>
+                <SyncJournal />
               </Card>
 
               <SectionTitle label="Dossier du vault (explorateur)" theme={theme} />

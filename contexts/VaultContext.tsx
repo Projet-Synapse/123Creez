@@ -9,6 +9,7 @@ import {
   saveFolder, deleteFolder, setCanvasThumbnail as persistThumbnail,
   setCanvasOrder as persistCanvasOrder, setFoldersOrder as persistFoldersOrder,
   setFolderPreviewMode as persistFolderPreviewMode,
+  setFolderParent as persistFolderParent,
   loadCanvas, createDefaultCanvas, generateId, setCanvasTransparentBg, addCanvasDrawingTime,
   computeThumbnailColor, computeStrokeCount,
 } from '@/services/vaultService';
@@ -18,7 +19,10 @@ import {
   readImageSize, buildImageLayer,
 } from '@/services/vaultFolderService';
 import { desktop } from '@/services/platform';
+import { AppState } from 'react-native';
+import { hydrateSyncStatus, subscribeSyncStatus } from '@/services/syncLog';
 import { recordTombstone, autoPush, syncNow, getSupabaseClient } from '@/services/supabaseService';
+import { canNestFolder } from '@/services/folderTree';
 
 interface VaultContextType {
   canvases: CanvasMeta[];
@@ -43,6 +47,8 @@ interface VaultContextType {
   /** Drag & drop: persists a manual ordering (canvases / folders). */
   reorderCanvases: (orderedIds: string[]) => Promise<void>;
   reorderFolders: (orderedIds: string[]) => Promise<void>;
+  /** Range un dossier dans un autre (null = racine). Refuse les cycles. */
+  moveFolder: (id: string, parentId: string | null) => Promise<boolean>;
   setFolderPreview: (id: string, mode: FolderPreviewMode) => Promise<void>;
   /** Stores a generated raster preview for a canvas. */
   setCanvasThumbnail: (id: string, thumbnail: string) => Promise<void>;
@@ -85,7 +91,19 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         running = false;
       }
     };
-    pull();
+    hydrateSyncStatus().finally(pull);
+    // Retour au premier plan : relancer un cycle (vide la file hors ligne).
+    // Une synchro lancée ailleurs (Reprendre, nouvel essai) peut avoir reçu
+    // des toiles : recharger la liste à chaque fin de cycle.
+    let prevPhase = '';
+    const unsubStatus = subscribeSyncStatus((st) => {
+      if (prevPhase === 'syncing' && st.phase !== 'syncing' && !cancelled) reload();
+      prevPhase = st.phase;
+    });
+    // Re-tirer régulièrement (2 min) tant que l'app est au premier plan : un PC
+    // resté ouvert voit ainsi arriver les toiles du téléphone.
+    const poll = setInterval(() => { if (AppState.currentState === 'active') pull(); }, 120_000);
+    const appSub = AppState.addEventListener('change', (st) => { if (st === 'active') pull(); });
     let unsub: (() => void) | undefined;
     try {
       const { data } = getSupabaseClient().auth.onAuthStateChange((event) => {
@@ -93,7 +111,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       });
       unsub = () => data.subscription.unsubscribe();
     } catch { /* Supabase non configuré */ }
-    return () => { cancelled = true; unsub?.(); };
+    return () => { cancelled = true; unsub?.(); appSub.remove(); unsubStatus(); clearInterval(poll); };
   }, [reload]);
 
   // Push Supabase automatique, débattu (une rafale de sauvegardes = un push).
@@ -180,6 +198,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       name,
       parentId: null,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
       color,
     };
     await saveFolder(folder);
@@ -192,8 +211,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     const f = flds.find(x => x.id === id);
     if (!f) return;
     f.name = name;
+    f.updatedAt = Date.now();
     await saveFolder(f);
-    setFolders(prev => prev.map(x => x.id === id ? { ...x, name } : x));
+    setFolders(prev => prev.map(x => x.id === id ? { ...x, name, updatedAt: f.updatedAt } : x));
   }, []);
 
   const removeFolder = useCallback(async (id: string) => {
@@ -219,13 +239,25 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     const rank = new Map(orderedIds.map((id, idx) => [id, idx]));
     setFolders(prev => prev.map(f => {
       const r = rank.get(f.id);
-      return r !== undefined ? { ...f, order: r } : f;
+      return r !== undefined && f.order !== r ? { ...f, order: r, updatedAt: Date.now() } : f;
     }));
+  }, []);
+
+  const moveFolder = useCallback(async (id: string, parentId: string | null) => {
+    const flds = await getFolders();
+    if (!canNestFolder(flds, id, parentId)) return false;
+    // Dernière position parmi ses nouveaux frères.
+    const siblings = flds.filter(f => f.id !== id && (f.parentId ?? null) === parentId);
+    const order = siblings.reduce((m, f) => Math.max(m, f.order ?? -1), -1) + 1;
+    const updated = await persistFolderParent(id, parentId, order);
+    if (!updated) return false;
+    setFolders(prev => prev.map(f => f.id === id ? { ...updated } : f));
+    return true;
   }, []);
 
   const setFolderPreview = useCallback(async (id: string, mode: FolderPreviewMode) => {
     await persistFolderPreviewMode(id, mode);
-    setFolders(prev => prev.map(f => f.id === id ? { ...f, previewMode: mode } : f));
+    setFolders(prev => prev.map(f => f.id === id ? { ...f, previewMode: mode, updatedAt: Date.now() } : f));
   }, []);
 
   const setCanvasThumbnail = useCallback(async (id: string, thumbnail: string) => {
@@ -323,7 +355,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       addCanvasDrawingTime: setCanvasDrawingTimeFn,
       setCanvasTransparentBg: setCanvasTransparentBgFn,
       createFolder, renameFolder, removeFolder, createImageCanvas,
-      reorderCanvases, reorderFolders, setFolderPreview, setCanvasThumbnail,
+      reorderCanvases, reorderFolders, moveFolder, setFolderPreview, setCanvasThumbnail,
       persistCanvas, loadCanvasData, reload,
     }}>
       {children}

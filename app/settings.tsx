@@ -13,6 +13,7 @@ import { SENSITIVITY_MIN, SENSITIVITY_MAX, clampSensitivity } from '@/services/g
 import { useSettingsNavLayout } from '@/hooks/useSettingsNavLayout';
 import { useTheme } from '@/hooks/useTheme';
 import { SyncSettings, VaultFolderSettings, AccountCard, SupabaseSetupSteps } from '@/components/feature/SyncSettings';
+import { SyncJournal, SyncPausedBanner } from '@/components/feature/SyncJournal';
 import { useAlert } from '@/template';
 import { useUpdates } from '@/hooks/useUpdates';
 import ResizeHandle from '@/components/feature/ResizeHandle';
@@ -324,6 +325,8 @@ export default function SettingsScreen() {
                 <Divider theme={theme} />
                 <ToggleRow label="Annuler : tap à 2 doigts" value={settings.undoTwoFingerTap ?? true} onToggle={v => updateSettings({ undoTwoFingerTap: v })} theme={theme} />
                 <ToggleRow label="Rétablir : tap à 3 doigts" value={settings.redoThreeFingerTap ?? true} onToggle={v => updateSettings({ redoThreeFingerTap: v })} theme={theme} />
+                <ToggleRow label="Rotation de la vue à 2 doigts" value={settings.rotateTwoFingers ?? true} onToggle={v => updateSettings({ rotateTwoFingers: v })} theme={theme} />
+                <ToggleRow label="Pipette : appui long sur la toile" value={settings.longPressEyedropper ?? true} onToggle={v => updateSettings({ longPressEyedropper: v })} theme={theme} />
                 <Text style={styles.stabilizerLabel}>Sélection d’outils</Text>
                 <View style={styles.historyRow}>
                   {(['bar', 'popup'] as const).map(mode => (
@@ -609,6 +612,7 @@ export default function SettingsScreen() {
           {/* ─── Synchronisation & dossier vault ─── */}
           {activeSection === 'sync' && (
             <View style={styles.section}>
+              <SyncPausedBanner />
               <SectionTitle label="Compte" theme={theme} />
               <Card theme={theme}>
                 <AccountCard />
@@ -622,6 +626,11 @@ export default function SettingsScreen() {
               <SectionTitle label="Synchronisation Supabase" theme={theme} />
               <Card theme={theme}>
                 <SyncSettings />
+              </Card>
+
+              <SectionTitle label="État et journal de synchro" theme={theme} />
+              <Card theme={theme}>
+                <SyncJournal />
               </Card>
 
               <SectionTitle label="Dossier du vault (explorateur)" theme={theme} />

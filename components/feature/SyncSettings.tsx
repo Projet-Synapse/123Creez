@@ -87,7 +87,7 @@ export const AccountCard: React.FC = () => {
   if (!available) {
     return (
       <Text style={[styles.hint, { color: theme.textMuted }]}>
-        Connexion disponible dans l’application de bureau uniquement.
+        Connexion indisponible sur cette plateforme (web).
       </Text>
     );
   }

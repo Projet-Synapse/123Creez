@@ -1,4 +1,7 @@
 // Powered by OnSpace.AI
+import { effectiveFolderId } from '@/services/syncDecide';
+import { canNestFolder, folderDropZone, folderPath, reorderAround } from '@/services/folderTree';
+import { SyncPausedBanner } from '@/components/feature/SyncJournal';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, TextInput,
@@ -163,7 +166,7 @@ const CanvasCard = React.memo(function CanvasCard({
   isDragging, isHovered, renamingName,
   onTap, onLongPress, onDragStart, onDragMove, onDragEnd,
   onOpen, onMenu, onRenameSubmit, onRenameChange,
-  registerLayout,
+  registerLayout, registerMeasurer,
 }: {
   item: CanvasMeta;
   thumbH: number;
@@ -184,8 +187,17 @@ const CanvasCard = React.memo(function CanvasCard({
   onRenameSubmit: () => void;
   onRenameChange: (name: string) => void;
   registerLayout: (l: CardLayout) => void;
+  registerMeasurer?: (fn: (() => void) | null) => void;
 }) {
   const viewRef = useRef<View>(null);
+  const measure = useCallback(() => {
+    viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+      registerLayout({ x: px, y: py, width: w, height: h }));
+  }, [registerLayout]);
+  useEffect(() => {
+    registerMeasurer?.(measure);
+    return () => registerMeasurer?.(null);
+  }, [registerMeasurer, measure]);
   const gestures = useCardGestures({
     onTap,
     onLongPress,
@@ -198,10 +210,7 @@ const CanvasCard = React.memo(function CanvasCard({
     <View
       ref={viewRef}
       style={[styles.canvasCell, { width: cellWidth }, isDragging && { opacity: 0.35 }]}
-      onLayout={() => {
-        viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
-          registerLayout({ x: px, y: py, width: w, height: h }));
-      }}
+      onLayout={measure}
     >
       <View style={styles.canvasCard}>
         {/* Gesture area: thumb + texts. The menu button stays OUTSIDE so its
@@ -237,14 +246,17 @@ const CanvasCard = React.memo(function CanvasCard({
 
 // ─── Folder card: per-folder preview mode ─────────────────────────────────────
 const FolderCard = React.memo(function FolderCard({
-  item, previewThumbs, count, isActive, isDropTarget, styles, theme,
-  onTap, onLongPress, onDragStart, onDragMove, onDragEnd, registerLayout,
+  item, previewThumbs, count, isActive, isDropTarget, insertSide, isDragging, styles, theme,
+  onTap, onLongPress, onDragStart, onDragMove, onDragEnd, registerLayout, registerMeasurer,
 }: {
   item: Folder;
   previewThumbs: CanvasMeta[];
   count: number;
   isActive: boolean;
   isDropTarget: boolean;
+  /** Barre d'insertion (réordonnancement) à gauche / à droite de la carte. */
+  insertSide?: 'before' | 'after' | null;
+  isDragging?: boolean;
   styles: any;
   theme: any;
   onTap: () => void;
@@ -253,9 +265,19 @@ const FolderCard = React.memo(function FolderCard({
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
   registerLayout: (l: CardLayout) => void;
+  registerMeasurer?: (fn: (() => void) | null) => void;
 }) {
   const viewRef = useRef<View>(null);
   const gestures = useCardGestures({ onTap, onLongPress, onDragStart, onDragMove, onDragEnd });
+  const measure = useCallback(() => {
+    viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+      registerLayout({ x: px, y: py, width: w, height: h }));
+  }, [registerLayout]);
+  // Re-mesure au début d'un glisser : la rangée horizontale a pu défiler.
+  useEffect(() => {
+    registerMeasurer?.(measure);
+    return () => registerMeasurer?.(null);
+  }, [registerMeasurer, measure]);
 
   const mode: FolderPreviewMode = item.previewMode ?? 'recent';
   const hasPreview = count > 0;
@@ -283,17 +305,24 @@ const FolderCard = React.memo(function FolderCard({
     <View
       ref={viewRef}
       {...gestures.panHandlers}
-      onLayout={() => {
-        viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
-          registerLayout({ x: px, y: py, width: w, height: h }));
-      }}
+      onLayout={measure}
+      style={isDragging ? { opacity: 0.35 } : undefined}
     >
+      {insertSide && (
+        <View pointerEvents="none" style={[styles.folderInsertBar, insertSide === 'before' ? { left: -8 } : { right: -8 }, { backgroundColor: theme.accent }]} />
+      )}
       <View
         style={[
           styles.folderCard,
           isActive && { borderColor: item.color, borderWidth: 2 },
-          isDropTarget && { borderColor: theme.accent, borderWidth: 2 },
+          isDropTarget && { borderColor: theme.accent, borderWidth: 3, backgroundColor: theme.activeGlow },
         ]}>
+        {isDropTarget && (
+          <View pointerEvents="none" style={styles.folderDropBadge}>
+            <MaterialCommunityIcons name="folder-download" size={12} color="#0d0d0d" />
+            <Text style={styles.folderDropBadgeText}>Ranger ici</Text>
+          </View>
+        )}
         {body}
         {showScrim && (
           <View style={styles.folderScrim}>
@@ -321,7 +350,7 @@ export default function VaultScreen() {
   const {
     canvases, folders, loading, createCanvas, removeCanvas, renameCanvas,
     moveCanvas, duplicateCanvas, createFolder, renameFolder, removeFolder,
-    reorderCanvases, reorderFolders, setFolderPreview,
+    reorderCanvases, reorderFolders, moveFolder, setFolderPreview,
     loadCanvasData, createImageCanvas,
   } = useVault();
 
@@ -342,13 +371,47 @@ export default function VaultScreen() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [hoverFolderId, setHoverFolderId] = useState<string | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  // Réordonnancement d'un dossier : carte visée + côté de la barre d'insertion.
+  const [folderInsert, setFolderInsert] = useState<{ targetId: string; side: 'before' | 'after' } | null>(null);
+  // Fil d'Ariane survolé ('root' ou id) : dépôt pour remonter d'un niveau.
+  const [hoverCrumb, setHoverCrumb] = useState<string | null>(null);
   const cardLayouts = useRef(new Map<string, CardLayout>());
+  const measurers = useRef(new Map<string, () => void>());
+  const measurerSetters = useRef(new Map<string, (fn: (() => void) | null) => void>());
+  const measurerFor = useCallback((key: string) => {
+    let setter = measurerSetters.current.get(key);
+    if (!setter) {
+      setter = (fn) => { if (fn) measurers.current.set(key, fn); else { measurers.current.delete(key); cardLayouts.current.delete(key); } };
+      measurerSetters.current.set(key, setter);
+    }
+    return setter;
+  }, []);
+  const layoutSetters = useRef(new Map<string, (l: CardLayout) => void>());
+  const layoutFor = useCallback((key: string) => {
+    let setter = layoutSetters.current.get(key);
+    if (!setter) {
+      setter = (l) => { cardLayouts.current.set(key, l); };
+      layoutSetters.current.set(key, setter);
+    }
+    return setter;
+  }, []);
+  const crumbRefs = useRef(new Map<string, View | null>());
+  const remeasureAll = useCallback(() => {
+    measurers.current.forEach(fn => fn());
+    crumbRefs.current.forEach((r, key) => r?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+      cardLayouts.current.set(`crumb:${key}`, { x: px, y: py, width: w, height: h })));
+  }, []);
   // Drop intent is tracked in a plain ref mutated synchronously during the
   // drag: at 200 px/frame the mouseup can land before React commits the
   // hover state, so state-mirrored refs would read stale (null) values.
-  const dropIntent = useRef<{ folderId: string | null; index: number | null; active: boolean }>({
-    folderId: null, index: null, active: false,
-  });
+  // folderId : ranger DANS ce dossier ('root' = remonter à la racine).
+  // insert : réordonner un dossier avant/après une carte.
+  const dropIntent = useRef<{
+    folderId: string | null; index: number | null; active: boolean;
+    insert: { targetId: string; side: 'before' | 'after' } | null;
+  }>({ folderId: null, index: null, active: false, insert: null });
+  const foldersRef = useRef<Folder[]>([]);
+  const activeFolderIdRef = useRef<string>('root');
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
   const hoverFolderRef = useRef<string | null>(null);
@@ -415,12 +478,21 @@ export default function VaultScreen() {
     ? sortCanvases(canvases.filter(c => c.name.toLowerCase().includes(trimmedQuery)))
     : [];
 
-  const visibleCanvases = sortCanvases(canvases.filter(c =>
-    activeFolderId === 'root' ? c.folderId === null : c.folderId === activeFolderId
-  ));
+  // Une toile dont le dossier n'existe pas localement (reçue avant lui) est
+  // affichée à la racine au lieu d'être invisible.
+  const folderIdSet = new Set(folders.map(f => f.id));
+  const visibleCanvases = sortCanvases(canvases.filter(c => {
+    const fid = effectiveFolderId(c.folderId, folderIdSet);
+    return activeFolderId === 'root' ? fid === null : fid === activeFolderId;
+  }));
   visibleRef.current = visibleCanvases;
+  // Dossiers du niveau affiché (racine ou sous-dossiers du dossier ouvert).
+  const currentParentId = activeFolderId === 'root' ? null : activeFolderId;
+  foldersRef.current = folders;
+  activeFolderIdRef.current = activeFolderId;
+  const crumbPath = activeFolderId === 'root' ? [] : folderPath(folders, activeFolderId);
   const rootFolders = folders
-    .filter(f => f.parentId === null)
+    .filter(f => effectiveFolderId(f.parentId, folderIdSet) === currentParentId)
     .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.createdAt - b.createdAt);
   rootFoldersRef.current = rootFolders;
   const activeSortMode = SORT_MODES.find(m => m.id === sortMode)!;
@@ -579,59 +651,69 @@ export default function VaultScreen() {
   }, [router]);
 
   // ─── Drag & drop resolution ───────────────────────────────────────
+  const hit = (key: string, x: number, y: number) => {
+    const l = cardLayouts.current.get(key);
+    return !!l && x >= l.x && x <= l.x + l.width && y >= l.y && y <= l.y + l.height;
+  };
+
+  const setIntent = (folderId: string | null, index: number | null, insert: { targetId: string; side: 'before' | 'after' } | null) => {
+    dropIntent.current = { folderId, index, active: true, insert };
+    const crumb = folderId && cardLayouts.current.has(`crumb:${folderId}`) && !rootFoldersRef.current.some(f => f.id === folderId) ? folderId : null;
+    setHoverCrumb(crumb);
+    setHoverFolderId(crumb ? null : folderId);
+    setHoverIndex(index);
+    setFolderInsert(prev => (prev?.targetId === insert?.targetId && prev?.side === insert?.side) ? prev : insert);
+  };
+
   const resolveDragMove = useCallback((kind: 'canvas' | 'folder', id: string, x: number, y: number) => {
-    if (kind !== 'canvas') {
-      dropIntent.current = { folderId: null, index: null, active: true };
-      setHoverFolderId(null); setHoverIndex(null);
-      return;
+    // 1. Fil d'Ariane (Racine / dossiers parents) : ranger/remonter dedans.
+    for (const key of ['root', ...folderPath(foldersRef.current, activeFolderIdRef.current === 'root' ? '' : activeFolderIdRef.current)]) {
+      if (!hit(`crumb:${key}`, x, y)) continue;
+      const target = key === 'root' ? null : key;
+      const ok = kind === 'canvas' ? key !== activeFolderIdRef.current : canNestFolder(foldersRef.current, id, target);
+      if (ok) { setIntent(key, null, null); return; }
     }
-    dropIntent.current.active = true;
 
-    // Folder under the pointer wins (drop canvas INTO folder).
-    let folderHit: string | null = null;
+    // 2. Cartes dossiers du niveau affiché.
     for (const f of rootFoldersRef.current) {
-      const l = cardLayouts.current.get(`folder:${f.id}`);
-      if (l && x >= l.x && x <= l.x + l.width && y >= l.y && y <= l.y + l.height) {
-        folderHit = f.id;
-        break;
+      if (f.id === id || !hit(`folder:${f.id}`, x, y)) continue;
+      if (kind === 'canvas') { setIntent(f.id, null, null); return; }
+      const l = cardLayouts.current.get(`folder:${f.id}`)!;
+      let zone = folderDropZone(x, l.x, l.width);
+      // Centre interdit (cycle) : on retombe sur un réordonnancement.
+      if (zone === 'into' && !canNestFolder(foldersRef.current, id, f.id)) {
+        zone = x < l.x + l.width / 2 ? 'before' : 'after';
       }
-    }
-    if (folderHit) {
-      dropIntent.current.folderId = folderHit;
-      dropIntent.current.index = null;
-      setHoverFolderId(folderHit);
-      setHoverIndex(null);
+      if (zone === 'into') setIntent(f.id, null, null);
+      else setIntent(null, null, { targetId: f.id, side: zone });
       return;
     }
 
-    // Otherwise find the hovered canvas slot for a reorder.
+    if (kind === 'folder') { setIntent(null, null, null); return; }
+
+    // 3. Toile : emplacement visé dans la grille (réordonnancement).
     let idx: number | null = null;
     for (let i = 0; i < visibleRef.current.length; i++) {
       const c = visibleRef.current[i];
       if (c.id === id) continue;
-      const l = cardLayouts.current.get(`canvas:${c.id}`);
-      if (l && x >= l.x && x <= l.x + l.width && y >= l.y && y <= l.y + l.height) {
-        idx = i;
-        break;
-      }
+      if (hit(`canvas:${c.id}`, x, y)) { idx = i; break; }
     }
-    dropIntent.current.folderId = null;
-    dropIntent.current.index = idx;
-    setHoverFolderId(null);
-    setHoverIndex(idx);
+    setIntent(null, idx, null);
   }, []);
 
   const resolveDragEnd = useCallback((kind: 'canvas' | 'folder', id: string) => {
     const intent = dropIntent.current;
-    dropIntent.current = { folderId: null, index: null, active: false };
+    dropIntent.current = { folderId: null, index: null, active: false, insert: null };
     setDrag(null);
     setHoverFolderId(null);
     setHoverIndex(null);
+    setFolderInsert(null);
+    setHoverCrumb(null);
     if (!intent.active) return;
 
     if (kind === 'canvas') {
       if (intent.folderId) {
-        moveCanvas(id, intent.folderId);
+        moveCanvas(id, intent.folderId === 'root' ? null : intent.folderId);
         return;
       }
       const idx = intent.index;
@@ -647,17 +729,18 @@ export default function VaultScreen() {
       return;
     }
 
-    // Folder reorder
-    const idx = intent.index;
-    if (idx === null) return;
-    const ids = rootFoldersRef.current.map(f => f.id);
-    const from = ids.indexOf(id);
-    if (from === -1) return;
-    ids.splice(from, 1);
-    const insertAt = Math.max(0, Math.min(ids.length, idx > from ? idx - 1 : idx));
-    ids.splice(insertAt, 0, id);
-    reorderFolders(ids);
-  }, [moveCanvas, reorderCanvases, reorderFolders]);
+    // Dossier rangé dans un autre (ou remonté via le fil d'Ariane).
+    if (intent.folderId) {
+      moveFolder(id, intent.folderId === 'root' ? null : intent.folderId);
+      return;
+    }
+    // Dossier réordonné parmi ses frères.
+    if (intent.insert) {
+      const ids = rootFoldersRef.current.map(f => f.id);
+      const next = reorderAround(ids, id, intent.insert.targetId, intent.insert.side);
+      if (next.join() !== ids.join()) reorderFolders(next);
+    }
+  }, [moveCanvas, moveFolder, reorderCanvases, reorderFolders]);
 
   handleDragEndRef.current = resolveDragEnd;
 
@@ -665,9 +748,9 @@ export default function VaultScreen() {
     item,
     onTap: () => handleOpenCanvas(item.id),
     onLongPress: () => handleContextMenu('canvas', item.id),
-    onDragStart: () => setDrag({
+    onDragStart: () => { remeasureAll(); setDrag({
       kind: 'canvas' as const, id: item.id, name: item.name, thumb: item.thumbnail, x: 0, y: 0, active: false,
-    }),
+    }); },
     onDragMove: (x: number, y: number) => {
       setDrag(prev => prev && prev.id === item.id ? { ...prev, x, y, active: true } : prev);
       resolveDragMove('canvas', item.id, x, y);
@@ -677,7 +760,7 @@ export default function VaultScreen() {
     onMenu: () => handleContextMenu('canvas', item.id),
     onRenameSubmit: handleRenameSubmit,
     onRenameChange: (n: string) => setRenaming(r => r && r.type === 'canvas' && r.id === item.id ? { ...r, name: n } : r),
-  }), [handleOpenCanvas, handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd]);
+  }), [handleOpenCanvas, handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd, remeasureAll]);
 
   const makeFolderCardProps = useCallback((item: Folder, previewThumbs: CanvasMeta[], count: number) => ({
     item,
@@ -685,13 +768,13 @@ export default function VaultScreen() {
     count,
     onTap: () => setActiveFolderId(item.id),
     onLongPress: () => handleContextMenu('folder', item.id),
-    onDragStart: () => setDrag({ kind: 'folder' as const, id: item.id, name: item.name, x: 0, y: 0, active: false }),
+    onDragStart: () => { remeasureAll(); setDrag({ kind: 'folder' as const, id: item.id, name: item.name, x: 0, y: 0, active: false }); },
     onDragMove: (x: number, y: number) => {
       setDrag(prev => prev && prev.id === item.id ? { ...prev, x, y, active: true } : prev);
       resolveDragMove('folder', item.id, x, y);
     },
     onDragEnd: () => resolveDragEnd('folder', item.id),
-  }), [handleContextMenu, resolveDragMove, resolveDragEnd]);
+  }), [handleContextMenu, resolveDragMove, resolveDragEnd, remeasureAll]);
 
   const contextItem = contextMenu
     ? (contextMenu.type === 'canvas'
@@ -712,9 +795,10 @@ export default function VaultScreen() {
       isDragging={drag?.kind === 'canvas' && drag.id === item.id && drag.active}
       isHovered={!!(drag?.active && hoverIndex !== null && visibleCanvases[hoverIndex]?.id === item.id)}
       renamingName={renaming?.type === 'canvas' && renaming.id === item.id ? renaming.name : null}
-      registerLayout={(l) => cardLayouts.current.set(`canvas:${item.id}`, l)}
+      registerLayout={layoutFor(`canvas:${item.id}`)}
+      registerMeasurer={measurerFor(`canvas:${item.id}`)}
     />
-  ), [makeCanvasCardProps, thumbHFor, colW, styles, theme, drag, hoverIndex, visibleCanvases, renaming]);
+  ), [makeCanvasCardProps, thumbHFor, colW, styles, theme, drag, hoverIndex, visibleCanvases, renaming, layoutFor, measurerFor]);
 
   const renderFolderItem = useCallback(({ item }: { item: Folder }) => {
     const contained = canvases
@@ -724,13 +808,16 @@ export default function VaultScreen() {
       <FolderCard
         {...makeFolderCardProps(item, contained.slice(0, 4), contained.length)}
         isActive={activeFolderId === item.id}
-        isDropTarget={!!(drag?.active && drag.kind === 'canvas' && hoverFolderId === item.id)}
+        isDropTarget={!!(drag?.active && hoverFolderId === item.id)}
+        insertSide={drag?.active && drag.kind === 'folder' && folderInsert?.targetId === item.id ? folderInsert.side : null}
+        isDragging={!!(drag?.active && drag.kind === 'folder' && drag.id === item.id)}
         styles={styles}
         theme={theme}
-        registerLayout={(l) => cardLayouts.current.set(`folder:${item.id}`, l)}
+        registerLayout={layoutFor(`folder:${item.id}`)}
+        registerMeasurer={measurerFor(`folder:${item.id}`)}
       />
     );
-  }, [canvases, makeFolderCardProps, activeFolderId, drag, hoverFolderId, styles, theme]);
+  }, [canvases, makeFolderCardProps, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor]);
 
   if (loading) {
     return (
@@ -743,6 +830,7 @@ export default function VaultScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <StatusBar style={theme.statusBarStyle} />
+      <SyncPausedBanner />
 
       {/* Header */}
       <View style={styles.header}>
@@ -836,33 +924,44 @@ export default function VaultScreen() {
           </>
         ) : (
           <>
-            {/* Breadcrumb */}
+            {/* Breadcrumb — chaque étape est aussi une zone de dépôt (remonter). */}
             <View style={styles.breadcrumbRow}>
               <Pressable
-                style={[styles.breadcrumb, activeFolderId === 'root' && styles.breadcrumbActive]}
+                ref={(r: any) => { crumbRefs.current.set('root', r); }}
+                onLayout={() => crumbRefs.current.get('root')?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+                  cardLayouts.current.set('crumb:root', { x: px, y: py, width: w, height: h }))}
+                style={[styles.breadcrumb, activeFolderId === 'root' && styles.breadcrumbActive, hoverCrumb === 'root' && { borderColor: theme.accent, borderWidth: 2 }]}
                 onPress={() => setActiveFolderId('root')}
               >
                 <MaterialCommunityIcons name="home-outline" size={14} color={activeFolderId === 'root' ? theme.accent : theme.textMuted} />
                 <Text style={[styles.breadcrumbText, activeFolderId === 'root' && { color: theme.accent }]}>Racine</Text>
               </Pressable>
-              {activeFolderId !== 'root' && (() => {
-                const folder = folders.find(f => f.id === activeFolderId);
-                return folder ? (
-                  <>
+              {crumbPath.map((fid) => {
+                const folder = folders.find(f => f.id === fid);
+                if (!folder) return null;
+                const isCurrent = fid === activeFolderId;
+                return (
+                  <React.Fragment key={fid}>
                     <MaterialCommunityIcons name="chevron-right" size={14} color={theme.textMuted} />
-                    <View style={[styles.breadcrumb, styles.breadcrumbActive]}>
+                    <Pressable
+                      ref={(r: any) => { crumbRefs.current.set(fid, r); }}
+                      onLayout={() => crumbRefs.current.get(fid)?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
+                        cardLayouts.current.set(`crumb:${fid}`, { x: px, y: py, width: w, height: h }))}
+                      style={[styles.breadcrumb, isCurrent && styles.breadcrumbActive, hoverCrumb === fid && { borderColor: theme.accent, borderWidth: 2 }]}
+                      onPress={() => setActiveFolderId(fid)}
+                    >
                       <MaterialCommunityIcons name="folder" size={14} color={folder.color} />
-                      <Text style={[styles.breadcrumbText, { color: theme.accent }]}>{folder.name}</Text>
-                    </View>
-                  </>
-                ) : null;
-              })()}
+                      <Text style={[styles.breadcrumbText, isCurrent && { color: theme.accent }]} numberOfLines={1}>{folder.name}</Text>
+                    </Pressable>
+                  </React.Fragment>
+                );
+              })}
             </View>
 
             {/* Folders */}
-            {activeFolderId === 'root' && rootFolders.length > 0 && (
+            {rootFolders.length > 0 && (
               <>
-                <Text style={styles.sectionTitle}>Dossiers</Text>
+                <Text style={styles.sectionTitle}>{activeFolderId === 'root' ? 'Dossiers' : 'Sous-dossiers'}</Text>
                 <FlatList
                   data={rootFolders}
                   keyExtractor={f => f.id}
@@ -870,7 +969,7 @@ export default function VaultScreen() {
                   horizontal
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.foldersRow}
-                  scrollEnabled={rootFolders.length > 4}
+                  scrollEnabled={rootFolders.length > 4 && !drag?.active}
                 />
               </>
             )}
@@ -1258,6 +1357,12 @@ function makeStyles(theme: any) {
     sectionTitle: { fontSize: 13, fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
     sectionCount: { fontSize: 12, color: theme.textMuted, backgroundColor: theme.surfaceHigh, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
     foldersRow: { paddingHorizontal: 16, paddingBottom: 8, gap: 12 },
+    folderInsertBar: { position: 'absolute', top: 4, bottom: 4, width: 4, borderRadius: 2, zIndex: 2 },
+    folderDropBadge: {
+      position: 'absolute', top: 4, left: 4, right: 4, zIndex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 3, paddingVertical: 2, borderRadius: 8, backgroundColor: theme.accent,
+    },
+    folderDropBadgeText: { fontSize: 10, fontWeight: '700', color: '#0d0d0d' },
     // Folder cards — per-folder preview (recent / mosaic / classic)
     folderCard: {
       width: 150, height: 150, borderRadius: 14, backgroundColor: theme.cardBg,

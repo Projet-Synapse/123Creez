@@ -49,7 +49,8 @@ export default function EditorScreen() {
   const { runTrigger, recording } = useAutomation();
 
   const [showLayers, setShowLayers] = useState(false);
-  const [panelVisible, setPanelVisible] = useState(true);
+  // Panneau droit fermé par défaut à l’ouverture d’une toile (non mémorisé).
+  const [panelVisible, setPanelVisible] = useState(false);
   // Largeur du panneau droit, réglable par la poignée sur son bord — la
   // valeur persiste dans les réglages au relâchement du drag.
   const [panelWidth, setPanelWidth] = useState(settings.editorPanelWidth ?? 200);

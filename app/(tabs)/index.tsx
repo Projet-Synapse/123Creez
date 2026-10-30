@@ -1,4 +1,6 @@
 // Powered by OnSpace.AI
+import { effectiveFolderId } from '@/services/syncDecide';
+import { SyncPausedBanner } from '@/components/feature/SyncJournal';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, TextInput,
@@ -415,12 +417,16 @@ export default function VaultScreen() {
     ? sortCanvases(canvases.filter(c => c.name.toLowerCase().includes(trimmedQuery)))
     : [];
 
-  const visibleCanvases = sortCanvases(canvases.filter(c =>
-    activeFolderId === 'root' ? c.folderId === null : c.folderId === activeFolderId
-  ));
+  // Une toile dont le dossier n'existe pas localement (reçue avant lui) est
+  // affichée à la racine au lieu d'être invisible.
+  const folderIdSet = new Set(folders.map(f => f.id));
+  const visibleCanvases = sortCanvases(canvases.filter(c => {
+    const fid = effectiveFolderId(c.folderId, folderIdSet);
+    return activeFolderId === 'root' ? fid === null : fid === activeFolderId;
+  }));
   visibleRef.current = visibleCanvases;
   const rootFolders = folders
-    .filter(f => f.parentId === null)
+    .filter(f => effectiveFolderId(f.parentId, folderIdSet) === null)
     .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.createdAt - b.createdAt);
   rootFoldersRef.current = rootFolders;
   const activeSortMode = SORT_MODES.find(m => m.id === sortMode)!;
@@ -743,6 +749,7 @@ export default function VaultScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <StatusBar style={theme.statusBarStyle} />
+      <SyncPausedBanner />
 
       {/* Header */}
       <View style={styles.header}>

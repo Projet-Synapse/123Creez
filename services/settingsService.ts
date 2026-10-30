@@ -29,6 +29,7 @@ export interface AppSettings {
   redoThreeFingerTap: boolean;
   /** Rotation de la vue à deux doigts (affichage seul). */
   rotateTwoFingers: boolean;
+  longPressEyedropper: boolean;  // Appui long sur la toile = pipette
   /** Sélection d'outils : barre latérale fixe ou popup repliable. */
   toolbarMode: 'bar' | 'popup';
   gyroCorrection: boolean;
@@ -85,6 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   undoTwoFingerTap: true,
   rotateTwoFingers: true,
   redoThreeFingerTap: true,
+  longPressEyedropper: true,
   toolbarMode: 'bar',
   gyroCorrection: false,
   panSensitivity: 1,

@@ -12,6 +12,7 @@
 // mono-poste) ; passer à l'auth Google comme 123Ecriture est enregistré
 // dans scores-qualite.md (sécurité).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
 import { remoteFolderWins } from './folderTree';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -83,12 +84,38 @@ function getClient(config: SupabaseConfig): SupabaseClient {
     // que le renderer ne peut pas lire en tant que page. Même choix que
     // 123Ecriture (supabaseClient.ts). La session persiste en localStorage
     // de l'origine app://local.
+    // Stockage de session EXPLICITE : sur Android/iOS il n'y a pas de
+    // localStorage, auth-js gardait donc la session (et le code_verifier PKCE)
+    // en mémoire seulement → reconnexion à chaque relance de l'app.
+    // Web/Electron : on garde localStorage (même clé par défaut
+    // sb-<ref>-auth-token) pour ne pas perdre la session desktop existante.
+    const isWeb = Platform.OS === 'web';
     client = createClient(config.url, config.anonKey, {
-      auth: { flowType: 'pkce', persistSession: true },
+      auth: {
+        flowType: 'pkce',
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: isWeb,
+        ...(isWeb ? {} : { storage: AsyncStorage }),
+      },
     });
+    installAutoRefreshOnForeground(client);
     clientKey = key;
   }
   return client;
+}
+
+// Recommandation Supabase pour React Native : ne rafraîchir le jeton que
+// lorsque l'app est au premier plan (les timers sont gelés en arrière-plan).
+let appStateSub: { remove: () => void } | null = null;
+function installAutoRefreshOnForeground(c: SupabaseClient) {
+  if (Platform.OS === 'web') return;
+  appStateSub?.remove();
+  if (AppState.currentState === 'active') c.auth.startAutoRefresh();
+  appStateSub = AppState.addEventListener('change', (st) => {
+    if (st === 'active') c.auth.startAutoRefresh();
+    else c.auth.stopAutoRefresh();
+  });
 }
 
 export async function isConfigured(): Promise<boolean> {

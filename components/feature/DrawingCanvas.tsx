@@ -18,6 +18,7 @@ import {
   scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible,
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
+import { screenToZone, zoomAboutAnchor, strokeGate, shouldCommitStroke } from '@/services/canvasInput';
 import { capturePixelSnapshot } from '@/services/pixelSnapshot';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
@@ -229,6 +230,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const panLastTX = useRef(0);
   const panLastTY = useRef(0);
   const isDrawing = useRef(false);
+  // Trait au doigt pas encore commencé (cf. strokeGate) : points en coord. toile.
+  const pendingStroke = useRef<{ t: number; points: { x: number; y: number }[] } | null>(null);
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
   const moveSnapshotTaken = useRef(false);
@@ -320,12 +323,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     const oldScale = lastScale.current;
     const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldScale * factor));
     if (newScale === oldScale) return;
+    // Rotation retirée, puis ancrage avec le pivot centré du scale natif.
     const z = zoneSizeRef.current;
     const anchor = unrotatePoint(anchorX, anchorY, z.w, z.h, lastRotation.current);
-    const canvasX = (anchor.x - lastTranslateX.current) / oldScale;
-    const canvasY = (anchor.y - lastTranslateY.current) / oldScale;
-    const newTX = anchor.x - canvasX * newScale;
-    const newTY = anchor.y - canvasY * newScale;
+    const { tx: newTX, ty: newTY } = zoomAboutAnchor(oldScale, newScale, lastTranslateX.current, lastTranslateY.current, anchor.x, anchor.y, z.w, z.h);
     scale.value = newScale;
     translateX.value = newTX;
     translateY.value = newTY;
@@ -477,9 +478,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     const { x: localX, y: localY } = unrotatePoint(rawX, rawY, zs.w, zs.h, lastRotation.current);
     const zone = zoneRef.current;
     const cs = contentSizeRef.current;
-    // 1) undo pan/zoom (transform en px de zone)
-    const vx = (localX - lastTranslateX.current) / lastScale.current;
-    const vy = (localY - lastTranslateY.current) / lastScale.current;
+    // 1) undo pan/zoom (transform en px de zone, scale centré sur la zone)
+    const { x: vx, y: vy } = screenToZone(localX, localY, lastTranslateX.current, lastTranslateY.current, lastScale.current, zone.w, zone.h);
     // 2) undo viewBox « meet » (k uniforme + centrage)
     if (cs) {
       const k = Math.min(zone.w / cs.width, zone.h / cs.height);
@@ -568,6 +568,39 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const measureEndRef = useRef(measureEnd);
   measureEndRef.current = measureEnd;
 
+  // Passage en pinch/pan (2e doigt) : le fragment tracé par le premier doigt
+  // est JETÉ (pas commité) — ce n'était pas une tentative de traçage.
+  function startPinch(touches: GestureResponderEvent['nativeEvent']['touches']) {
+    const g = gestureInfo.current;
+    g.maxTouches = Math.max(g.maxTouches, touches.length);
+    if (!g.midStart) g.midStart = getMidpointPage(touches);
+    isPinching.current = true;
+    isDrawing.current = false;
+    pendingStroke.current = null;
+    clearLongPressRef.current();
+    cancelStrokeRef.current();
+    cancelLassoRef.current();
+    measureEndRef.current(true);
+    pinchStartDistance.current = getDistance(touches);
+    pinchStartScale.current = lastScale.current;
+    const mid = getMidpointPage(touches);
+    panStartX.current = mid.x;
+    panStartY.current = mid.y;
+    panLastTX.current = lastTranslateX.current;
+    panLastTY.current = lastTranslateY.current;
+    rotStartAngle.current = touchAngle(touches[0].pageX, touches[0].pageY, touches[1].pageX, touches[1].pageY);
+    rotStartView.current = lastRotation.current;
+    rotActive.current = false;
+  }
+  // Démarre réellement un trait en attente (points mémorisés rejoués).
+  function flushPendingStroke() {
+    const p = pendingStroke.current;
+    pendingStroke.current = null;
+    if (!p) return;
+    beginStrokeRef.current(p.points[0].x, p.points[0].y, paintScaleRef.current);
+    for (let i = 1; i < p.points.length; i++) continueStrokeRef.current(p.points[i].x, p.points[i].y);
+  }
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -585,25 +618,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           midMoved: 0,
         };
 
+        pendingStroke.current = null;
         if (touches.length >= 2) {
-          isPinching.current = true;
-          isDrawing.current = false;
-          // Un deuxième doigt = pinch/pan : le fragment tracé par le premier
-          // doigt est JETÉ (pas commité) — c'est une tentative de traçage.
-          clearLongPressRef.current();
-          cancelStrokeRef.current();
-          cancelLassoRef.current();
-          measureEndRef.current(true);
-          pinchStartDistance.current = getDistance(touches);
-          pinchStartScale.current = lastScale.current;
-          const mid = getMidpointPage(touches);
-          panStartX.current = mid.x;
-          panStartY.current = mid.y;
-          panLastTX.current = lastTranslateX.current;
-          panLastTY.current = lastTranslateY.current;
-          rotStartAngle.current = touchAngle(touches[0].pageX, touches[0].pageY, touches[1].pageX, touches[1].pageY);
-          rotStartView.current = lastRotation.current;
-          rotActive.current = false;
+          startPinch(touches);
           return;
         }
 
@@ -711,7 +728,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
-        beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
+        // Au doigt, le trait attend ~80 ms : si un 2e doigt arrive, c'était
+        // un pinch/pan et rien n'est tracé. Souris/web : immédiat.
+        if (Platform.OS === 'web') beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
+        else pendingStroke.current = { t: Date.now(), points: [c] };
         // Appui long → pipette (outils de tracé uniquement).
         clearLongPressRef.current();
         longPressFired.current = false;
@@ -723,6 +743,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           if (!st || !isDrawing.current || isPinching.current) return;
           longPressFired.current = true;
           isDrawing.current = false;
+          pendingStroke.current = null;
           cancelStrokeRef.current();
           const pc = toCanvasCoords(st.x, st.y);
           const col = eyedropColorRef.current(pc.x, pc.y);
@@ -732,8 +753,24 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }, LONG_PRESS_MS);
       },
 
-      onPanResponderMove: (evt) => {
+      // Doigt supplémentaire posé SANS mouvement (ex. tap à deux doigts) :
+      // PanResponder ne le signale pas dans Move → on bascule en pinch ici.
+      onPanResponderStart: (evt) => {
         const touches = evt.nativeEvent.touches;
+        if (touches.length >= 2 && !isPinching.current) startPinch(touches);
+      },
+
+      onPanResponderMove: (evt, gs) => {
+        const touches = evt.nativeEvent.touches;
+        // Certains Android remontent un 2e doigt dans numberActiveTouches
+        // avant `touches` : on jette le trait sans attendre.
+        if (touches.length < 2 && gs.numberActiveTouches >= 2) {
+          gestureInfo.current.maxTouches = Math.max(gestureInfo.current.maxTouches, gs.numberActiveTouches);
+          pendingStroke.current = null;
+          clearLongPressRef.current();
+          if (isDrawing.current) { isDrawing.current = false; cancelStrokeRef.current(); cancelLassoRef.current(); }
+          return;
+        }
 
         if (touches.length >= 2) {
           const g = gestureInfo.current;
@@ -742,24 +779,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
             const mid = getMidpointPage(touches);
             g.midMoved = Math.max(g.midMoved, Math.hypot(mid.x - g.midStart.x, mid.y - g.midStart.y));
           }
-          if (!isPinching.current) {
-            isPinching.current = true;
-            isDrawing.current = false;
-            clearLongPressRef.current();
-            cancelStrokeRef.current();
-            cancelLassoRef.current();
-            measureEndRef.current(true);
-            pinchStartDistance.current = getDistance(touches);
-            pinchStartScale.current = lastScale.current;
-            const mid = getMidpointPage(touches);
-            panStartX.current = mid.x;
-            panStartY.current = mid.y;
-            panLastTX.current = lastTranslateX.current;
-            panLastTY.current = lastTranslateY.current;
-            rotStartAngle.current = touchAngle(touches[0].pageX, touches[0].pageY, touches[1].pageX, touches[1].pageY);
-            rotStartView.current = lastRotation.current;
-            rotActive.current = false;
-          }
+          if (!isPinching.current) startPinch(touches);
 
           const newDist = getDistance(touches);
           const mid = getMidpointPage(touches);
@@ -894,6 +914,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }
 
         const c = toCanvasCoords(pageX, pageY);
+        const pend = pendingStroke.current;
+        if (pend) {
+          pend.points.push(c);
+          const gate = strokeGate({ elapsedMs: Date.now() - pend.t, maxTouches: gestureInfo.current.maxTouches, defer: true });
+          if (gate === 'start') flushPendingStroke();
+          else if (gate === 'cancel') pendingStroke.current = null;
+          return;
+        }
         continueStrokeRef.current(c.x, c.y);
       },
 
@@ -949,6 +977,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           return;
         }
         if (tool !== 'fill' && tool !== 'move') {
+          // Un geste qui a vu 2 doigts ne laisse JAMAIS de trait (points noirs).
+          if (!shouldCommitStroke(g.maxTouches)) { pendingStroke.current = null; cancelStrokeRef.current(); return; }
+          // Tap bref à un doigt : le point voulu est tracé.
+          if (pendingStroke.current) flushPendingStroke();
           endStrokeRef.current();
         }
       },
@@ -963,6 +995,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         isDrawing.current = false;
         measureEndRef.current(true);
         if (activeToolRef.current === 'measure') return;
+        // Geste interrompu : un trait en attente ou multi-doigts est jeté.
+        if (pendingStroke.current || !shouldCommitStroke(gestureInfo.current.maxTouches)) {
+          pendingStroke.current = null;
+          cancelStrokeRef.current();
+          cancelLassoRef.current();
+          return;
+        }
         endStrokeRef.current();
         endLassoRef.current();
       },

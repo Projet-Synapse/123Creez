@@ -325,6 +325,8 @@ export default function SettingsScreen() {
                 <Divider theme={theme} />
                 <ToggleRow label="Annuler : tap à 2 doigts" value={settings.undoTwoFingerTap ?? true} onToggle={v => updateSettings({ undoTwoFingerTap: v })} theme={theme} />
                 <ToggleRow label="Rétablir : tap à 3 doigts" value={settings.redoThreeFingerTap ?? true} onToggle={v => updateSettings({ redoThreeFingerTap: v })} theme={theme} />
+                <ToggleRow label="Rotation de la vue à 2 doigts" value={settings.rotateTwoFingers ?? true} onToggle={v => updateSettings({ rotateTwoFingers: v })} theme={theme} />
+                <ToggleRow label="Pipette : appui long sur la toile" value={settings.longPressEyedropper ?? true} onToggle={v => updateSettings({ longPressEyedropper: v })} theme={theme} />
                 <Text style={styles.stabilizerLabel}>Sélection d’outils</Text>
                 <View style={styles.historyRow}>
                   {(['bar', 'popup'] as const).map(mode => (

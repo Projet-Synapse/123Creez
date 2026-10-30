@@ -58,3 +58,27 @@ test('nav des paramètres selon la largeur', () => {
   assert.equal(settingsNavLayoutFor(1280), 'side');
   assert.equal(settingsNavLayoutFor(0), 'side');
 });
+
+import { normalizeAngle, rotateVec, unrotatePoint, snapAngle, touchAngle } from '../gestureMath';
+
+test('rotation de vue : normalisation et aimantage', () => {
+  assert.equal(normalizeAngle(190), -170);
+  assert.equal(normalizeAngle(-180), 180);
+  assert.equal(snapAngle(4), 0);
+  assert.equal(snapAngle(-3), 0);
+  assert.equal(snapAngle(93), 90);
+  assert.equal(snapAngle(178), 180);
+  assert.equal(snapAngle(30), 30);
+  assert.equal(touchAngle(0, 0, 0, 10), 90);
+});
+
+test('unrotatePoint inverse exactement la rotation autour du centre', () => {
+  const w = 400, h = 300, deg = 37;
+  const p = { x: 120, y: 80 };
+  // écran = C + R(deg)(p − C)
+  const v = rotateVec(p.x - w / 2, p.y - h / 2, deg);
+  const screen = { x: w / 2 + v.x, y: h / 2 + v.y };
+  const back = unrotatePoint(screen.x, screen.y, w, h, deg);
+  assert.ok(Math.abs(back.x - p.x) < 1e-9 && Math.abs(back.y - p.y) < 1e-9);
+  assert.deepEqual(unrotatePoint(5, 6, w, h, 0), { x: 5, y: 6 });
+});

@@ -26,6 +26,9 @@ publish:
   releaseType: release
 
 linux:
+  # Le paquet .deb exige un mainteneur ; sans lui electron-builder réclame
+  # l'e-mail de l'auteur (absent de desktop/package.json).
+  maintainer: Catelyn2332
   target:
     - AppImage
     - deb

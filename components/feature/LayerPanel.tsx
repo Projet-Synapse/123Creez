@@ -4,7 +4,7 @@ import { View, StyleSheet, Text, Pressable, ScrollView, TextInput } from 'react-
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useCanvas } from '@/hooks/useCanvas';
-import { pickImageAsDataUrl, fitPhotoSize } from '@/services/pickImage';
+import { pickImageAsDataUrl } from '@/services/pickImage';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 const LayerPanel: React.FC = () => {
@@ -25,8 +25,7 @@ const LayerPanel: React.FC = () => {
     try {
       const img = await pickImageAsDataUrl();
       if (!img) return;
-      const { width, height } = fitPhotoSize(img.width, img.height);
-      addPhotoLayer(img.src, width, height);
+      addPhotoLayer(img.src, img.width, img.height);
       setActiveTool('move');
     } catch (e) {
       console.error('[calques] import photo échoué', e);

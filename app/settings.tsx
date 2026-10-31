@@ -383,6 +383,8 @@ export default function SettingsScreen() {
                   ))}
                 </View>
                 <Divider theme={theme} />
+                <ToggleRow label="Calques pixel (expérimental, local seulement)" value={settings.experimentalPixelLayers ?? false} onToggle={v => updateSettings({ experimentalPixelLayers: v })} theme={theme} />
+                <Divider theme={theme} />
                 <ToggleRow label="Correction gyroscopique" value={settings.gyroCorrection ?? false} onToggle={v => updateSettings({ gyroCorrection: v })} theme={theme} />
               </Card>
             </View>

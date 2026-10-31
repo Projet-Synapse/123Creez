@@ -39,6 +39,8 @@ export interface AppSettings {
   zoomSensitivity: number;
   /** Affichage en zoom : lisse (vectoriel) ou pixélisé (pixels du document agrandis sans lissage). Affichage seul. */
   zoomRendering: 'smooth' | 'pixelated';
+  /** EXPÉRIMENTAL : les nouveaux calques « normal » sont en pixels (local seulement). */
+  experimentalPixelLayers: boolean;
   // Interface
   showLayerInfo: boolean;
   uiAnimations: boolean;
@@ -92,6 +94,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   panSensitivity: 1,
   zoomSensitivity: 1,
   zoomRendering: 'smooth',
+  experimentalPixelLayers: false,
   // Interface
   showLayerInfo: true,
   uiAnimations: true,

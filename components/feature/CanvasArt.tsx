@@ -40,6 +40,7 @@ interface LayerLike {
   images?: (LayerImage & { angle?: number })[];
   shapes?: { id: string; kind: 'line' | 'rect' | 'ellipse'; x: number; y: number; w: number; h: number; color: string; size: number; opacity: number; fill: boolean }[];
   texts?: { id: string; x: number; y: number; value: string; size: number; color: string; opacity: number }[];
+  raster?: { tile: number; tiles?: Record<string, string> };
 }
 
 interface CanvasArtProps {
@@ -123,6 +124,22 @@ export function CanvasArt({
               width={img.width}
               height={img.height}
               transform={rot}
+            />
+          );
+        })}
+        {/* Calque pixel : une image PNG par tuile (moteur expérimental). */}
+        {layer.raster?.tiles && Object.entries(layer.raster.tiles).map(([k, url]) => {
+          const [tx, ty] = k.split(',').map(Number);
+          const t = layer.raster!.tile;
+          return (
+            <SvgImage
+              key={`px-${k}`}
+              href={{ uri: url }}
+              x={tx * t + dx}
+              y={ty * t + dy}
+              width={t}
+              height={t}
+              preserveAspectRatio="none"
             />
           );
         })}

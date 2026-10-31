@@ -5,6 +5,8 @@ import React, {
 } from 'react';
 import { useTheme } from '@/hooks/useTheme';
 import { splitStrokesByPolygon, Point, distanceToStroke } from '@/services/selectionService';
+import { RasterState, createRasterState, applyStrokeToRaster } from '@/services/rasterState';
+import { tileCodec } from '@/services/rasterCodec';
 
 /** Forme géométrique posée par l'outil Formes (rendu SVG dédié, pas un
     trait quadratique). x/y/w/h = boîte englobante en coordonnées toile. */
@@ -63,6 +65,8 @@ export interface Layer {
       calques). Champ JSON optionnel : aucune migration, ignoré par les
       anciennes versions. */
   kind?: LayerKind;
+  /** Calque « normal » en pixels (moteur expérimental, étape 1). */
+  raster?: RasterState;
 }
 
 export type LayerKind = 'raster' | 'vector' | 'photo';
@@ -135,6 +139,8 @@ interface CanvasContextType {
   moveSelection: (dx: number, dy: number) => void;
 
   addLayer: (kind?: LayerKind) => void;
+  /** Taille du document (px) : dimensionne les nouveaux calques pixel. */
+  setDocSize: (w: number, h: number) => void;
   /** Nouveau calque « photo » contenant l'image (référence), activé. */
   addPhotoLayer: (src: string, width: number, height: number) => void;
   removeLayer: (id: string) => void;
@@ -186,6 +192,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // 0 = le trait suit le doigt brut ; 100 = très lissé (et légèrement retardé).
   const stabilizer = Math.max(0, Math.min(100, settings.strokeStabilizer ?? 0));
   const smoothPointRef = useRef<{ x: number; y: number } | null>(null);
+  const pixelLayersRef = useRef(false);
+  pixelLayersRef.current = settings.experimentalPixelLayers === true;
+  const docSizeRef = useRef({ w: 1080, h: 1920 });
   const lastRawPointRef = useRef<{ x: number; y: number } | null>(null);
   const [canvasId, setCanvasId] = useState<string | null>(null);
   const [layers, setLayers] = useState<Layer[]>(createDefaultLayers());
@@ -322,6 +331,31 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setCurrentLassoPoints([]);
   }, []);
 
+  // Calque pixel : le trait est tamponné dans les tuiles puis encodé. Les
+  // traits sont traités dans l'ordre (file) ; l'updater de setCurrentStroke
+  // peut être rejoué (StrictMode), d'où le filtre par id.
+  const rasterQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const rasterDoneRef = useRef<Set<string>>(new Set());
+  const commitRasterStroke = useCallback((layerId: string, stroke: StrokePath) => {
+    if (rasterDoneRef.current.has(stroke.id)) return;
+    rasterDoneRef.current.add(stroke.id);
+    rasterQueueRef.current = rasterQueueRef.current.then(async () => {
+      const layer = layersRef.current.find(l => l.id === layerId);
+      if (!layer?.raster) return;
+      try {
+        const next = await applyStrokeToRaster(layer.raster, stroke, tileCodec);
+        if (next === layer.raster) return;
+        setLayers(ls => {
+          saveHistory(ls);
+          return ls.map(l => (l.id === layerId ? { ...l, raster: next } : l));
+        });
+        markDirty();
+      } catch (e) {
+        console.warn('[pixels] trait non appliqué', e);
+      }
+    });
+  }, [saveHistory, markDirty]);
+
   const endStroke = useCallback(() => {
     const lastRaw = lastRawPointRef.current;
     setCurrentStroke(prev => {
@@ -330,6 +364,12 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       // du doigt (l'EMA retarde sinon, laissant le geste « inachevé »).
       if (lastRaw && stabilizer > 0 && prev.points.length > 0) {
         prev = { ...prev, points: [...prev.points, lastRaw] };
+      }
+      const target = layersRef.current.find(l => l.id === activeLayerId);
+      if (target?.raster && pixelLayersRef.current
+        && (prev.tool === 'brush' || prev.tool === 'pencil' || prev.tool === 'eraser')) {
+        commitRasterStroke(activeLayerId, prev);
+        return null;
       }
       setLayers(layers => {
         saveHistory(layers);
@@ -342,7 +382,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       markDirty();
       return null;
     });
-  }, [activeLayerId, saveHistory, markDirty, stabilizer]);
+  }, [activeLayerId, saveHistory, markDirty, stabilizer, commitRasterStroke]);
 
   // ─── Lasso ───────────────────────────────────────────────────────────
   const beginLasso = useCallback((x: number, y: number) => {
@@ -634,13 +674,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [saveHistory]);
 
   const clearCanvas = useCallback(() => {
-    setLayers(prev => { saveHistory(prev); return prev.map(l => ({ ...l, strokes: [] })); });
+    setLayers(prev => { saveHistory(prev); return prev.map(l => ({ ...l, strokes: [], ...(l.raster ? { raster: { ...l.raster, tiles: {} } } : {}) })); });
     setSelection(null);
     markDirty();
   }, [saveHistory, markDirty]);
 
   const clearLayer = useCallback((id: string) => {
-    setLayers(prev => { saveHistory(prev); return prev.map(l => l.id === id ? { ...l, strokes: [] } : l); });
+    setLayers(prev => { saveHistory(prev); return prev.map(l => l.id === id ? { ...l, strokes: [], ...(l.raster ? { raster: { ...l.raster, tiles: {} } } : {}) } : l); });
     markDirty();
   }, [saveHistory, markDirty]);
 
@@ -648,10 +688,17 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const id = `layer-${++layerIdRef.current}`;
     const label = kind === 'vector' ? 'Vectoriel' : 'Calque';
     const newLayer: Layer = { id, name: `${label} ${layerIdRef.current}`, visible: true, opacity: 1, strokes: [], kind };
+    if (kind === 'raster' && pixelLayersRef.current) {
+      newLayer.raster = createRasterState(docSizeRef.current.w, docSizeRef.current.h);
+    }
     setLayers(prev => { saveHistory(prev); return [...prev, newLayer]; });
     setActiveLayerId(id);
     markDirty();
   }, [saveHistory, markDirty]);
+
+  const setDocSize = useCallback((w: number, h: number) => {
+    if (w > 0 && h > 0) docSizeRef.current = { w, h };
+  }, []);
 
   const addPhotoLayer = useCallback((src: string, width: number, height: number) => {
     const id = `layer-${++layerIdRef.current}`;
@@ -704,6 +751,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       addLayer, addPhotoLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
       pickLayerAt, eyedropColor, addLayerGroup, renameLayerGroup, removeLayerGroup,
       toggleGroupCollapsed, setLayerGroup, toggleGroupVisibility,
+      setDocSize,
       undo, redo, snapshotHistory, clearCanvas, clearLayer, fillLayer,
       loadLayers, markClean,
     }}>

@@ -39,7 +39,7 @@ export default function EditorScreen() {
   const { showAlert } = useAlert();
   const { theme, settings, updateSettings } = useTheme();
   const {
-    history, redoStack, undo, redo, clearCanvas, loadLayers, layers, layerGroups,
+    history, redoStack, undo, redo, clearCanvas, loadLayers, setDocSize, layers, layerGroups,
     activeLayerId, isDirty, markClean, setActiveTool, setActiveColor,
     setBrushSize, fillLayer, clearLayer, brushSize, setBrushOpacity,
     brushOpacity, activeTool, activeColor, clearSelection, commitSelection,
@@ -111,6 +111,7 @@ export default function EditorScreen() {
     loadCanvasData(id).then(async data => {
       if (data) {
         loadLayers(data.meta.id, data.layers, data.activeLayerId, data.groups);
+        setDocSize(data.meta.width, data.meta.height);
         setCanvasTransparentBgState(data.meta.transparentBg === true);
         // Toile plus grande que la zone (mobile) : on l'ajuste d'emblée,
         // sinon une partie reste hors champ sans geste pour l'atteindre.

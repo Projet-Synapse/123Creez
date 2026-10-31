@@ -12,6 +12,7 @@
 // mono-poste) ; passer à l'auth Google comme 123Ecriture est enregistré
 // dans scores-qualite.md (sécurité).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { stripRasterTiles, keepLocalRasterTiles } from './rasterState';
 import { AppState, Platform } from 'react-native';
 import { remoteFolderWins } from './folderTree';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -213,7 +214,8 @@ function rowFromCanvas(data: CanvasData, meta: CanvasMeta) {
     thumb_at: int(meta.thumbAt),
     order_index: int(meta.order),
     synced_at: new Date().toISOString(),
-    data,
+    // Étape 1 du moteur pixel : les tuiles restent locales.
+    data: stripRasterTiles(data as never) as typeof data,
   };
 }
 
@@ -387,7 +389,7 @@ async function runSync(): Promise<SyncResult> {
         continue;
       }
       if (decision === 'pull') {
-        await saveCanvas(remoteData);
+        await saveCanvas(keepLocalRasterTiles(remoteData as never, (await loadCanvas(rc.id)) as never) as typeof remoteData);
         pulled++;
         synced[rc.id] = remoteAt;
         logSync('reception', `Toile « ${remoteData.meta.name} »`);
@@ -395,7 +397,7 @@ async function runSync(): Promise<SyncResult> {
         // La distante est plus récente : la locale est d'abord sauvegardée en copie.
         const localData = await loadCanvas(rc.id);
         const copy = localData ? await saveConflictCopy(localData, 'locale') : null;
-        await saveCanvas(remoteData);
+        await saveCanvas(keepLocalRasterTiles(remoteData as never, localData as never) as typeof remoteData);
         pulled++;
         synced[rc.id] = remoteAt;
         logSync('conflit', `« ${remoteData.meta.name} » modifiée des deux côtés — gagnante : version distante (plus récente)` + (copy ? ` ; version locale sauvegardée sous « ${copy} »` : ''));

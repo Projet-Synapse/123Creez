@@ -220,6 +220,8 @@ function rowFromCanvas(data: CanvasData, meta: CanvasMeta) {
 function canvasFromRow(row: any): CanvasData | null {
   if (!row?.data?.meta || !Array.isArray(row.data.layers)) return null;
   return {
+    // Champs inconnus de la toile (version plus récente) conservés.
+    ...row.data,
     meta: {
       ...row.data.meta,
       id: row.id,

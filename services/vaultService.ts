@@ -1,5 +1,6 @@
 // Powered by OnSpace.AI
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { preserveUnknownFields } from './preserveUnknown';
 import { Layer } from '@/contexts/CanvasContext';
 
 export interface CanvasMeta {
@@ -97,6 +98,13 @@ export async function loadCanvas(id: string): Promise<CanvasData | null> {
 }
 
 export async function saveCanvas(data: CanvasData): Promise<void> {
+  // Ne jamais effacer les champs ajoutés par une version plus récente.
+  let prev: unknown = null;
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.CANVAS_DATA(data.meta.id));
+    prev = raw ? JSON.parse(raw) : null;
+  } catch { prev = null; }
+  data = preserveUnknownFields(data, prev);
   await AsyncStorage.setItem(KEYS.CANVAS_DATA(data.meta.id), JSON.stringify(data));
   const metas = await getCanvasMetas();
   const idx = metas.findIndex(m => m.id === data.meta.id);

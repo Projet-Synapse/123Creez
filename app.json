@@ -2,7 +2,7 @@
   "expo": {
     "name": "123Créez",
     "slug": "onspace-app",
-    "version": "1.0.21",
+    "version": "1.0.22-test.1",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": ["onspaceapp", "app123creez"],
@@ -18,7 +18,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "versionCode": 10026
+      "versionCode": 10027
     },
     "web": {
       "bundler": "metro",

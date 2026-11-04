@@ -59,7 +59,13 @@ export interface Layer {
   texts?: TextItem[];
   /** Organisational group (no effect on stacking order). */
   groupId?: string | null;
+  /** Type choisi à la création (bouton « + »). Absent = 'raster' (anciens
+      calques). Champ JSON optionnel : aucune migration, ignoré par les
+      anciennes versions. */
+  kind?: LayerKind;
 }
+
+export type LayerKind = 'raster' | 'vector' | 'photo';
 
 export interface LayerGroup {
   id: string;
@@ -128,7 +134,9 @@ interface CanvasContextType {
   // Move selection
   moveSelection: (dx: number, dy: number) => void;
 
-  addLayer: () => void;
+  addLayer: (kind?: LayerKind) => void;
+  /** Nouveau calque « photo » contenant l'image (référence), activé. */
+  addPhotoLayer: (src: string, width: number, height: number) => void;
   removeLayer: (id: string) => void;
   toggleLayerVisibility: (id: string) => void;
   setLayerOpacity: (id: string, opacity: number) => void;
@@ -393,6 +401,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         strokes: layer.strokes.map(stroke => stroke.tool === 'fill'
           ? stroke
           : { ...stroke, points: stroke.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }),
+        // L'outil Déplacer bouge tout le contenu du calque (photo de
+        // référence importée incluse), pas seulement les traits.
+        ...(layer.images ? { images: layer.images.map(im => ({ ...im, x: im.x + dx, y: im.y + dy })) } : {}),
+        ...(layer.shapes ? { shapes: layer.shapes.map(sh => ({ ...sh, x: sh.x + dx, y: sh.y + dy })) } : {}),
+        ...(layer.texts ? { texts: layer.texts.map(t => ({ ...t, x: t.x + dx, y: t.y + dy })) } : {}),
       };
     }));
     markDirty();
@@ -631,9 +644,21 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     markDirty();
   }, [saveHistory, markDirty]);
 
-  const addLayer = useCallback(() => {
+  const addLayer = useCallback((kind: LayerKind = 'raster') => {
     const id = `layer-${++layerIdRef.current}`;
-    const newLayer: Layer = { id, name: `Calque ${layerIdRef.current}`, visible: true, opacity: 1, strokes: [] };
+    const label = kind === 'vector' ? 'Vectoriel' : 'Calque';
+    const newLayer: Layer = { id, name: `${label} ${layerIdRef.current}`, visible: true, opacity: 1, strokes: [], kind };
+    setLayers(prev => { saveHistory(prev); return [...prev, newLayer]; });
+    setActiveLayerId(id);
+    markDirty();
+  }, [saveHistory, markDirty]);
+
+  const addPhotoLayer = useCallback((src: string, width: number, height: number) => {
+    const id = `layer-${++layerIdRef.current}`;
+    const newLayer: Layer = {
+      id, name: `Photo ${layerIdRef.current}`, visible: true, opacity: 1, strokes: [], kind: 'photo',
+      images: [{ id: `img-${Date.now()}`, src, x: 0, y: 0, width, height }],
+    };
     setLayers(prev => { saveHistory(prev); return [...prev, newLayer]; });
     setActiveLayerId(id);
     markDirty();
@@ -676,7 +701,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       addShape, addLines, addText, transformLayerImage,
       beginLasso, continueLasso, endLasso,
       moveSelection,
-      addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
+      addLayer, addPhotoLayer, removeLayer, toggleLayerVisibility, setLayerOpacity,
       pickLayerAt, eyedropColor, addLayerGroup, renameLayerGroup, removeLayerGroup,
       toggleGroupCollapsed, setLayerGroup, toggleGroupVisibility,
       undo, redo, snapshotHistory, clearCanvas, clearLayer, fillLayer,

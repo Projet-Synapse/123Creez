@@ -6,7 +6,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, Text, Pressable, TextInput,
   FlatList, ScrollView, Modal, ActivityIndicator, Image,
-  PanResponder, GestureResponderEvent, PanResponderGestureState, useWindowDimensions,
+  PanResponder, GestureResponderEvent, useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -74,25 +74,39 @@ const GRID_GAP = 10;
 
 // ─── Shared card gesture handling ─────────────────────────────────────────────
 // Souris ET tactile : l'appui immobile est capté dès le doigt posé — un
-// relâchement sans mouvement est le TAP (ouvre la toile), ~550 ms sans
-// bouger ouvre le menu. Le scroll vertical reprend la main tant qu'aucun
-// drag horizontal n'a démarré (les flicks continuent de faire défiler la
-// grille) ; une fois le drag commencé, il peut partir dans tous les sens.
+// relâchement sans mouvement est le TAP (ouvre la toile / le dossier).
+// Renommer / supprimer passent UNIQUEMENT par la bulle « ⋮ » de la carte.
+// Déplacer (glisser-déposer) :
+//  - tactile : appui long (~450 ms) immobile → la carte « décolle » sous le
+//    doigt, puis on la promène. Un mouvement AVANT l'appui long est un
+//    scroll : la carte rend la main au défilement et ne fait rien d'autre ;
+//  - souris : le glisser démarre dès que le pointeur bouge (bureau).
 // Callbacks through refs to dodge stale closures.
 interface CardGesturesOpts {
   onTap: () => void;
-  onLongPress: () => void;
   onDragStart: () => void;
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
 }
 
+const CARD_DRAG_HOLD_MS = 450;
+
 function useCardGestures(opts: CardGesturesOpts) {
   const cb = useRef(opts);
   cb.current = opts;
-  const moved = useRef(false);
+  const dragging = useRef(false);
+  const cancelled = useRef(false);
+  const isMouse = useRef(false);
+  const last = useRef({ x: 0, y: 0 });
   const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startedAt = useRef(0);
+  const clear = () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } };
+  const beginDrag = () => {
+    if (dragging.current) return;
+    dragging.current = true;
+    cb.current.onDragStart();
+    // La vignette fantôme apparaît tout de suite sous le doigt.
+    cb.current.onDragMove(last.current.x, last.current.y);
+  };
 
   return useRef(PanResponder.create({
     onStartShouldSetPanResponderCapture: (e: GestureResponderEvent) => {
@@ -102,53 +116,50 @@ function useCardGestures(opts: CardGesturesOpts) {
     },
     // Touch: claim on finger-down TOO — sans ça, un tap immobile n'était
     // jamais remis à la carte (release non reçue) et n'ouvrait rien sur
-    // Android ; le scroll vertical repasse par TerminationRequest.
+    // Android ; le scroll repasse par TerminationRequest.
     onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
-      // Touch path (mouse already claimed on start): horizontal-first, or any
-      // direction once held — quick flicks keep scrolling the page.
-      const dist = Math.hypot(g.dx, g.dy);
-      const held = Date.now() - startedAt.current > 300;
-      return (Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy)) || (held && dist > 10);
-    },
-    onPanResponderGrant: () => {
-      startedAt.current = Date.now();
-      moved.current = false;
-      lpTimer.current = setTimeout(() => {
-        if (!moved.current) cb.current.onLongPress();
-      }, 550);
+    onMoveShouldSetPanResponder: () => false,
+    onPanResponderGrant: (e: GestureResponderEvent) => {
+      isMouse.current = ((e.nativeEvent as any)?.type ?? '').startsWith('mouse');
+      dragging.current = false;
+      cancelled.current = false;
+      last.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
+      clear();
+      if (!isMouse.current) {
+        lpTimer.current = setTimeout(() => {
+          lpTimer.current = null;
+          if (!cancelled.current) beginDrag();
+        }, CARD_DRAG_HOLD_MS);
+      }
     },
     onPanResponderMove: (e, g) => {
-      if (!moved.current && Math.hypot(g.dx, g.dy) > 8) {
-        moved.current = true;
-        if (lpTimer.current) clearTimeout(lpTimer.current);
-        cb.current.onDragStart();
+      last.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
+      if (!dragging.current && !cancelled.current && Math.hypot(g.dx, g.dy) > 8) {
+        if (isMouse.current) beginDrag();
+        else { cancelled.current = true; clear(); } // bougé trop tôt : c'est un scroll
       }
-      if (moved.current) {
-        cb.current.onDragMove(e.nativeEvent.pageX, e.nativeEvent.pageY);
-      }
+      if (dragging.current) cb.current.onDragMove(last.current.x, last.current.y);
     },
     onPanResponderRelease: () => {
-      if (lpTimer.current) clearTimeout(lpTimer.current);
-      if (!moved.current) cb.current.onTap();
-      else cb.current.onDragEnd();
+      clear();
+      if (dragging.current) cb.current.onDragEnd();
+      else if (!cancelled.current) cb.current.onTap();
+      dragging.current = false;
     },
     onPanResponderTerminate: () => {
       // The scroll view stole the gesture (touch scroll): neither a tap nor
       // a drag — just clean up.
-      if (lpTimer.current) clearTimeout(lpTimer.current);
-      if (moved.current) cb.current.onDragEnd();
-      moved.current = false;
+      clear();
+      cancelled.current = true;
+      if (dragging.current) cb.current.onDragEnd();
+      dragging.current = false;
     },
-    onPanResponderTerminationRequest: (_e: GestureResponderEvent, g: PanResponderGestureState) => {
-      // Scroll vertical : il garde la main tant qu'aucun drag (horizontal ou
-      // appui long tenu) n'a réellement commencé.
-      const held = Date.now() - startedAt.current > 300;
-      return !moved.current && !held
-        && !(Math.abs(g.dx) > 6 && Math.abs(g.dx) > Math.abs(g.dy));
-    },
+    // Le défilement garde la main tant que la carte n'a pas « décollé ».
+    onPanResponderTerminationRequest: () => !dragging.current,
   })).current;
 }
+
+type GridItem = { kind: 'folder'; folder: Folder } | { kind: 'canvas'; canvas: CanvasMeta };
 
 interface DragState {
   kind: 'canvas' | 'folder';
@@ -164,7 +175,7 @@ interface DragState {
 const CanvasCard = React.memo(function CanvasCard({
   item, thumbH, thumbW, cellWidth, styles, theme,
   isDragging, isHovered, renamingName,
-  onTap, onLongPress, onDragStart, onDragMove, onDragEnd,
+  onTap, onDragStart, onDragMove, onDragEnd,
   onOpen, onMenu, onRenameSubmit, onRenameChange,
   registerLayout, registerMeasurer,
 }: {
@@ -178,7 +189,6 @@ const CanvasCard = React.memo(function CanvasCard({
   isHovered: boolean;
   renamingName: string | null;
   onTap: () => void;
-  onLongPress: () => void;
   onDragStart: () => void;
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
@@ -200,7 +210,6 @@ const CanvasCard = React.memo(function CanvasCard({
   }, [registerMeasurer, measure]);
   const gestures = useCardGestures({
     onTap,
-    onLongPress,
     onDragStart,
     onDragMove,
     onDragEnd,
@@ -247,7 +256,7 @@ const CanvasCard = React.memo(function CanvasCard({
 // ─── Folder card: per-folder preview mode ─────────────────────────────────────
 const FolderCard = React.memo(function FolderCard({
   item, previewThumbs, count, isActive, isDropTarget, insertSide, isDragging, styles, theme,
-  onTap, onLongPress, onDragStart, onDragMove, onDragEnd, registerLayout, registerMeasurer,
+  onTap, onMenu, onDragStart, onDragMove, onDragEnd, registerLayout, registerMeasurer,
 }: {
   item: Folder;
   previewThumbs: CanvasMeta[];
@@ -260,7 +269,7 @@ const FolderCard = React.memo(function FolderCard({
   styles: any;
   theme: any;
   onTap: () => void;
-  onLongPress: () => void;
+  onMenu: () => void;
   onDragStart: () => void;
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
@@ -268,7 +277,7 @@ const FolderCard = React.memo(function FolderCard({
   registerMeasurer?: (fn: (() => void) | null) => void;
 }) {
   const viewRef = useRef<View>(null);
-  const gestures = useCardGestures({ onTap, onLongPress, onDragStart, onDragMove, onDragEnd });
+  const gestures = useCardGestures({ onTap, onDragStart, onDragMove, onDragEnd });
   const measure = useCallback(() => {
     viewRef.current?.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) =>
       registerLayout({ x: px, y: py, width: w, height: h }));
@@ -304,10 +313,10 @@ const FolderCard = React.memo(function FolderCard({
   return (
     <View
       ref={viewRef}
-      {...gestures.panHandlers}
       onLayout={measure}
       style={isDragging ? { opacity: 0.35 } : undefined}
     >
+      <View {...gestures.panHandlers}>
       {insertSide && (
         <View pointerEvents="none" style={[styles.folderInsertBar, insertSide === 'before' ? { left: -8 } : { right: -8 }, { backgroundColor: theme.accent }]} />
       )}
@@ -337,6 +346,11 @@ const FolderCard = React.memo(function FolderCard({
           {count} toile{count !== 1 ? 's' : ''}
         </Text>
       </View>
+      </View>
+      {/* Même bulle « ⋮ » que les toiles, hors de la zone de glisser. */}
+      <Pressable style={styles.cardMoreBtn} onPress={onMenu} hitSlop={8} accessibilityLabel={`Options du dossier ${item.name}`}>
+        <MaterialCommunityIcons name="dots-vertical" size={16} color="#444" />
+      </Pressable>
     </View>
   );
 });
@@ -747,7 +761,6 @@ export default function VaultScreen() {
   const makeCanvasCardProps = useCallback((item: CanvasMeta) => ({
     item,
     onTap: () => handleOpenCanvas(item.id),
-    onLongPress: () => handleContextMenu('canvas', item.id),
     onDragStart: () => { remeasureAll(); setDrag({
       kind: 'canvas' as const, id: item.id, name: item.name, thumb: item.thumbnail, x: 0, y: 0, active: false,
     }); },
@@ -767,7 +780,7 @@ export default function VaultScreen() {
     previewThumbs,
     count,
     onTap: () => setActiveFolderId(item.id),
-    onLongPress: () => handleContextMenu('folder', item.id),
+    onMenu: () => handleContextMenu('folder', item.id),
     onDragStart: () => { remeasureAll(); setDrag({ kind: 'folder' as const, id: item.id, name: item.name, x: 0, y: 0, active: false }); },
     onDragMove: (x: number, y: number) => {
       setDrag(prev => prev && prev.id === item.id ? { ...prev, x, y, active: true } : prev);
@@ -818,6 +831,14 @@ export default function VaultScreen() {
       />
     );
   }, [canvases, makeFolderCardProps, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor]);
+
+  const gridItems: GridItem[] = [
+    ...rootFolders.map(folder => ({ kind: 'folder' as const, folder })),
+    ...visibleCanvases.map(canvas => ({ kind: 'canvas' as const, canvas })),
+  ];
+  const renderGridItem = ({ item }: { item: GridItem }) => item.kind === 'folder'
+    ? <View style={[styles.canvasCell, { width: colW + GRID_GAP }]}>{renderFolderItem({ item: item.folder })}</View>
+    : renderCanvasItem({ item: item.canvas });
 
   if (loading) {
     return (
@@ -958,31 +979,15 @@ export default function VaultScreen() {
               })}
             </View>
 
-            {/* Folders */}
-            {rootFolders.length > 0 && (
-              <>
-                <Text style={styles.sectionTitle}>{activeFolderId === 'root' ? 'Dossiers' : 'Sous-dossiers'}</Text>
-                <FlatList
-                  data={rootFolders}
-                  keyExtractor={f => f.id}
-                  renderItem={renderFolderItem}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.foldersRow}
-                  scrollEnabled={rootFolders.length > 4 && !drag?.active}
-                />
-              </>
-            )}
-
-            {/* Canvas grid */}
+            {/* Une seule liste : dossiers du niveau affiché puis toiles. */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>
-                {activeFolderId === 'root' ? 'Toutes les toiles' : folders.find(f => f.id === activeFolderId)?.name ?? 'Toiles'}
+                {activeFolderId === 'root' ? 'Racine' : folders.find(f => f.id === activeFolderId)?.name ?? 'Dossier'}
               </Text>
-              <Text style={styles.sectionCount}>{visibleCanvases.length}</Text>
+              <Text style={styles.sectionCount}>{rootFolders.length + visibleCanvases.length}</Text>
             </View>
 
-            {visibleCanvases.length === 0 ? (
+            {rootFolders.length + visibleCanvases.length === 0 ? (
               <View style={styles.emptyState}>
                 <MaterialCommunityIcons name="brush" size={56} color={theme.textMuted} />
                 <Text style={styles.emptyTitle}>Aucune toile</Text>
@@ -990,9 +995,9 @@ export default function VaultScreen() {
               </View>
             ) : (
               <FlatList
-                data={visibleCanvases}
-                keyExtractor={c => c.id}
-                renderItem={renderCanvasItem}
+                data={gridItems}
+                keyExtractor={it => `${it.kind}:${it.kind === 'folder' ? it.folder.id : it.canvas.id}`}
+                renderItem={renderGridItem}
                 numColumns={numColumns}
                 key={`grid-${numColumns}`}
                 scrollEnabled={false}
@@ -1356,7 +1361,6 @@ function makeStyles(theme: any) {
     sectionHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, gap: 8 },
     sectionTitle: { fontSize: 13, fontWeight: '700', color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
     sectionCount: { fontSize: 12, color: theme.textMuted, backgroundColor: theme.surfaceHigh, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, fontWeight: '600' },
-    foldersRow: { paddingHorizontal: 16, paddingBottom: 8, gap: 12 },
     folderInsertBar: { position: 'absolute', top: 4, bottom: 4, width: 4, borderRadius: 2, zIndex: 2 },
     folderDropBadge: {
       position: 'absolute', top: 4, left: 4, right: 4, zIndex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -1365,7 +1369,7 @@ function makeStyles(theme: any) {
     folderDropBadgeText: { fontSize: 10, fontWeight: '700', color: '#0d0d0d' },
     // Folder cards — per-folder preview (recent / mosaic / classic)
     folderCard: {
-      width: 150, height: 150, borderRadius: 14, backgroundColor: theme.cardBg,
+      width: '100%', aspectRatio: 1, borderRadius: 14, backgroundColor: theme.cardBg,
       borderWidth: 1, borderColor: theme.surfaceBorder, alignItems: 'center', justifyContent: 'center', gap: 6,
       overflow: 'hidden',
     },
@@ -1380,7 +1384,7 @@ function makeStyles(theme: any) {
     },
     folderNameOnImage: { fontSize: 12, color: '#ffffff', fontWeight: '600', flex: 1 },
     folderCountOverlay: {
-      position: 'absolute', right: 6, top: 6, bottom: 'auto',
+      position: 'absolute', left: 6, top: 6, bottom: 'auto',
       backgroundColor: 'rgba(0,0,0,0.55)', color: '#ffffff',
       paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10, overflow: 'hidden',
     },

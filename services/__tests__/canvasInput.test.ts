@@ -75,3 +75,17 @@ test('sliderValue borne entre 0 et 1', () => {
   assert.equal(sliderValue(999, 200), 1);
   assert.equal(sliderValue(50, 0), 0);
 });
+
+test('pinch : le point de la toile sous les doigts reste sous les doigts (zoom + pan)', async () => {
+  const { anchorTranslate, screenToZone, zoneToScreen } = await import('../canvasInput');
+  const w = 400, h = 700;
+  let tx = 30, ty = -12, s = 1.3;
+  const mid0 = { x: 120, y: 500 };
+  const p = screenToZone(mid0.x, mid0.y, tx, ty, s, w, h);
+  for (const [scale, mx, my] of [[2.4, 150, 480], [0.6, 90, 520], [7, 300, 100]] as const) {
+    ({ tx, ty } = anchorTranslate(p.x, p.y, mx, my, scale, w, h));
+    s = scale;
+    const back = zoneToScreen(p.x, p.y, tx, ty, s, w, h);
+    assert.ok(Math.abs(back.x - mx) < 1e-9 && Math.abs(back.y - my) < 1e-9);
+  }
+});

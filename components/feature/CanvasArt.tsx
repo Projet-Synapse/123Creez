@@ -6,6 +6,7 @@
 import React from 'react';
 import { Svg, Path, Rect, Defs, Mask, G, Pattern, Ellipse, Text as SvgText, Image as SvgImage } from 'react-native-svg';
 import { StrokePath, LayerImage } from '@/contexts/CanvasContext';
+import { eraserSegments } from '@/services/eraserOrder';
 
 export function buildSvgPath(stroke: StrokePath, dx = 0, dy = 0): string {
   if (stroke.tool === 'fill') return '';
@@ -86,11 +87,9 @@ export function CanvasArt({
   const content = layers.map(layer => {
     if (!layer.visible) return null;
     const eraserMaskId = `mask-${variant}-${layer.id}`;
-    const drawStrokes = layer.strokes.filter(s => s.tool !== 'fill' && s.tool !== 'eraser');
-    const eraserStrokes = layer.strokes.filter(s => s.tool === 'eraser');
     const fillStrokes = layer.strokes.filter(s => s.tool === 'fill');
 
-    const paths = drawStrokes.map(stroke => {
+    const renderDraw = (stroke: StrokePath) => {
       const d = buildSvgPath(stroke, dx, dy);
       if (!d) return null;
       return (
@@ -104,6 +103,44 @@ export function CanvasArt({
           strokeOpacity={stroke.opacity}
           fill="none"
         />
+      );
+    };
+    // Gomme dans l'ordre chronologique : chaque tronçon n'est effacé que par
+    // les gommes qui le SUIVENT (cf. services/eraserOrder.ts).
+    let paths: React.ReactNode = null;
+    eraserSegments(layer.strokes).forEach((seg, i) => {
+      const group = (
+        <>
+          {paths}
+          {seg.draws.map(renderDraw)}
+        </>
+      );
+      if (seg.erasers.length === 0) { paths = group; return; }
+      const id = `${eraserMaskId}-${i}`;
+      paths = (
+        <G key={id}>
+          <Defs>
+            <Mask id={id} x="0" y="0" width={vbW} height={vbH}>
+              <Rect x={0} y={0} width={vbW} height={vbH} fill="white" />
+              {seg.erasers.map(stroke => {
+                const d = buildSvgPath(stroke, dx, dy);
+                if (!d) return null;
+                return (
+                  <Path
+                    key={stroke.id}
+                    d={d}
+                    stroke="black"
+                    strokeWidth={stroke.size}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
+                  />
+                );
+              })}
+            </Mask>
+          </Defs>
+          <G mask={`url(#${id})`}>{group}</G>
+        </G>
       );
     });
 
@@ -176,31 +213,7 @@ export function CanvasArt({
             <Rect x={0} y={0} width={vbW} height={vbH} fill={lastFill.color} opacity={lastFill.opacity} />
           );
         })()}
-        {eraserStrokes.length > 0 ? (
-          <>
-            <Defs>
-              <Mask id={eraserMaskId} x="0" y="0" width={vbW} height={vbH}>
-                <Rect x={0} y={0} width={vbW} height={vbH} fill="white" />
-                {eraserStrokes.map(stroke => {
-                  const d = buildSvgPath(stroke, dx, dy);
-                  if (!d) return null;
-                  return (
-                    <Path
-                      key={stroke.id}
-                      d={d}
-                      stroke="black"
-                      strokeWidth={stroke.size}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      fill="none"
-                    />
-                  );
-                })}
-              </Mask>
-            </Defs>
-            <G mask={`url(#${eraserMaskId})`}>{paths}</G>
-          </>
-        ) : paths}
+        {paths}
         {/* Textes posés (outil Texte), au-dessus des traits. */}
         {(layer.texts ?? []).map(t => (
           <SvgText

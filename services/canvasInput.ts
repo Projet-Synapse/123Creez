@@ -49,6 +49,21 @@ export function zoomAboutAnchor(
   };
 }
 
+/**
+ * Translation qui place le point de zone (px, py) exactement sous le point
+ * écran local (sx, sy) à l'échelle `scale` (pivot centré) :
+ *   s = c + T + S(p − c)  ⇒  T = s − c − S(p − c).
+ * Sert au pinch : zoom centré sur les doigts + panoramique en un seul calcul.
+ */
+export function anchorTranslate(
+  px: number, py: number, sx: number, sy: number, scale: number, w: number, h: number,
+): { tx: number; ty: number } {
+  return {
+    tx: sx - w / 2 - scale * (px - w / 2),
+    ty: sy - h / 2 - scale * (py - h / 2),
+  };
+}
+
 /** Délai (ms) pendant lequel un trait au doigt reste « en attente ». */
 export const STROKE_START_DELAY_MS = 80;
 

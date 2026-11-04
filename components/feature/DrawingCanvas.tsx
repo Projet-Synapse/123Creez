@@ -18,7 +18,7 @@ import {
   scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible,
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
-import { screenToZone, zoomAboutAnchor, strokeGate, shouldCommitStroke } from '@/services/canvasInput';
+import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke } from '@/services/canvasInput';
 import { capturePixelSnapshot } from '@/services/pixelSnapshot';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
@@ -225,6 +225,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const isPinching = useRef(false);
   const pinchStartDistance = useRef(0);
   const pinchStartScale = useRef(1);
+  // Point de la zone (non zoomée) pris sous le milieu des deux doigts au
+  // début du pinch : il doit RESTER sous les doigts pendant tout le geste.
+  const pinchAnchor = useRef<{ x: number; y: number } | null>(null);
   const panStartX = useRef(0);
   const panStartY = useRef(0);
   const panLastTX = useRef(0);
@@ -465,6 +468,15 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     };
   }
 
+  // pageX/pageY → point local à la zone, rotation de vue retirée.
+  function pageToLocal(pageX: number, pageY: number) {
+    const layout = containerLayout.current;
+    const rawX = layout ? pageX - layout.x : pageX;
+    const rawY = layout ? pageY - layout.y : pageY;
+    const zs = zoneSizeRef.current;
+    return unrotatePoint(rawX, rawY, zs.w, zs.h, lastRotation.current);
+  }
+
   // Convert pageX/pageY (absolute screen) → coordonnées de la TOILE.
   // Chaîne inverse exacte du rendu :
   //   écran = pan/zoom (T + S×zone) ; zone = offset + k×toile (viewBox
@@ -568,6 +580,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const measureEndRef = useRef(measureEnd);
   measureEndRef.current = measureEnd;
 
+  const pixelGestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function clearPixelGestureTimer() {
+    if (pixelGestureTimer.current) { clearTimeout(pixelGestureTimer.current); pixelGestureTimer.current = null; }
+  }
+
   // Passage en pinch/pan (2e doigt) : le fragment tracé par le premier doigt
   // est JETÉ (pas commité) — ce n'était pas une tentative de traçage.
   function startPinch(touches: GestureResponderEvent['nativeEvent']['touches']) {
@@ -577,6 +594,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     isPinching.current = true;
     isDrawing.current = false;
     pendingStroke.current = null;
+    // Pinch : rien ne change dans le dessin → la vue pixélisée reste.
+    clearPixelGestureTimer();
+    setPixelGestureRef.current(false);
     clearLongPressRef.current();
     cancelStrokeRef.current();
     cancelLassoRef.current();
@@ -588,6 +608,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     panStartY.current = mid.y;
     panLastTX.current = lastTranslateX.current;
     panLastTY.current = lastTranslateY.current;
+    {
+      const l = pageToLocal(mid.x, mid.y);
+      const zone = zoneRef.current;
+      pinchAnchor.current = screenToZone(l.x, l.y, lastTranslateX.current, lastTranslateY.current, lastScale.current, zone.w, zone.h);
+    }
     rotStartAngle.current = touchAngle(touches[0].pageX, touches[0].pageY, touches[1].pageX, touches[1].pageY);
     rotStartView.current = lastRotation.current;
     rotActive.current = false;
@@ -608,8 +633,19 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderGrant: (evt) => {
         const touches = evt.nativeEvent.touches;
-        // Pendant un geste, la vue lisse (Svg en direct) est affichée.
-        if (settingsRef.current.zoomRendering === 'pixelated') setPixelGestureRef.current(true);
+        // Vue pixélisée : on ne repasse au Svg en direct QUE pour un geste qui
+        // modifie le dessin (trait, gomme, déplacement…), et seulement une
+        // fois sûr que ce n'est pas un pinch (délai > attente de 80 ms du
+        // trait). Zoom / pan / rotation gardent l'instantané pixélisé : il
+        // suit les mêmes valeurs de transformation que le Svg.
+        clearPixelGestureTimer();
+        if (settingsRef.current.zoomRendering === 'pixelated' && touches.length < 2
+          && !PIXEL_KEEP_TOOLS.has(activeToolRef.current)) {
+          pixelGestureTimer.current = setTimeout(() => {
+            pixelGestureTimer.current = null;
+            if (!isPinching.current && isDrawing.current) setPixelGestureRef.current(true);
+          }, PIXEL_LIVE_DELAY_MS);
+        }
 
         gestureInfo.current = {
           start: Date.now(),
@@ -808,13 +844,26 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
               lastRotation.current = a;
             }
           }
-          // Le déplacement est mesuré à l'écran ; la translation vit dans la
-          // zone non tournée → on dé-tourne le vecteur.
-          const sd = rotateVec(mid.x - panStartX.current, mid.y - panStartY.current, -lastRotation.current);
-          const dx = scalePan(sd.x, settingsRef.current.panSensitivity);
-          const dy = scalePan(sd.y, settingsRef.current.panSensitivity);
-          const newTX = panLastTX.current + dx;
-          const newTY = panLastTY.current + dy;
+          // Zoom + panoramique EXACTS : le point de la toile pris sous les
+          // doigts au départ est replacé sous le milieu actuel des doigts
+          // (rotation de vue retirée, pivot centré du scale natif). Avant,
+          // le zoom pivotait autour du centre de la zone et seul le
+          // déplacement du milieu était ajouté → la toile « glissait ».
+          // Sensibilité du pan ≠ 1 : le milieu « effectif » est amplifié.
+          const effX = panStartX.current + scalePan(mid.x - panStartX.current, settingsRef.current.panSensitivity);
+          const effY = panStartY.current + scalePan(mid.y - panStartY.current, settingsRef.current.panSensitivity);
+          let newTX: number;
+          let newTY: number;
+          const anchor = pinchAnchor.current;
+          if (anchor) {
+            const l = pageToLocal(effX, effY);
+            const zone = zoneRef.current;
+            ({ tx: newTX, ty: newTY } = anchorTranslate(anchor.x, anchor.y, l.x, l.y, lastScale.current, zone.w, zone.h));
+          } else {
+            const sd = rotateVec(effX - panStartX.current, effY - panStartY.current, -lastRotation.current);
+            newTX = panLastTX.current + sd.x;
+            newTY = panLastTY.current + sd.y;
+          }
           translateX.value = newTX;
           translateY.value = newTY;
           lastTranslateX.current = newTX;
@@ -926,6 +975,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       },
 
       onPanResponderRelease: () => {
+        clearPixelGestureTimer();
         setPixelGestureRef.current(false);
         if (rotActive.current) { rotActive.current = false; applyRotationRef.current(lastRotation.current); }
         clearLongPressRef.current();
@@ -986,6 +1036,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       },
 
       onPanResponderTerminate: () => {
+        clearPixelGestureTimer();
         setPixelGestureRef.current(false);
         if (rotActive.current) { rotActive.current = false; applyRotationRef.current(lastRotation.current); }
         clearLongPressRef.current();
@@ -1103,7 +1154,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       } catch {
         // Échec de capture : on reste simplement en vue lisse.
       }
-    }, 180);
+    }, 16); // une image : la vue lisse ne reste visible que le temps de la capture
     return () => { cancelled = true; clearTimeout(t); };
   }, [pixelEligible, pixelGesture, pixelSuppressed, pixelSnap, width, height, docW, docH]);
   // Mode remis sur « lisse » ou zoom repassé sous le seuil : la mémoire de
@@ -1409,6 +1460,10 @@ const rotStyles = StyleSheet.create({
 });
 
 /** Appui long → pipette : délai et tolérance de mouvement. */
+// Outils qui ne modifient pas le dessin : la vue pixélisée reste affichée.
+const PIXEL_KEEP_TOOLS = new Set<string>(['measure', 'eyedropper']);
+// Au-delà du délai d'attente d'un trait (80 ms) : un pinch est déjà détecté.
+const PIXEL_LIVE_DELAY_MS = 90;
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_TOLERANCE_PX = 8;
 

@@ -6,6 +6,7 @@
 // compressing to JPEG. Fully self-contained — no DOM measuring, no
 // view-shot — so it behaves identically in the browser and in Electron.
 import { Layer } from '@/contexts/CanvasContext';
+import { eraserSegments } from './eraserOrder';
 
 function strokeLinecap(tool: string): 'square' | 'round' {
   return tool === 'pencil' ? 'square' : 'round';
@@ -50,8 +51,6 @@ export function buildCanvasSvg(
 
   for (const layer of layers) {
     if (!layer.visible || layer.strokes.length === 0) continue;
-    const draws = layer.strokes.filter(s => s.tool !== 'fill' && s.tool !== 'eraser');
-    const erasers = layer.strokes.filter(s => s.tool === 'eraser');
     const fills = layer.strokes.filter(s => s.tool === 'fill');
 
     // Images du calque : sous les traits (même ordre que CanvasArt).
@@ -78,25 +77,26 @@ export function buildCanvasSvg(
       body.push(`<rect x="0" y="0" width="${canvasWidth}" height="${canvasHeight}" fill="${f.color}" opacity="${f.opacity}"/>`);
     }
 
-    const paths = draws
-      .map(s => strokeToSvgPath(s, s.color, `stroke-width="${s.size}" stroke-opacity="${s.opacity}" stroke-linecap="${strokeLinecap(s.tool)}" stroke-linejoin="round"`))
-      .filter(Boolean)
-      .join('');
-
-    let group = '';
-    if (erasers.length > 0) {
-      const maskId = `thumb-mask-${layer.id.replace(/[^a-zA-Z0-9-]/g, '')}`;
-      const cuts = erasers
+    // Gomme dans l'ordre chronologique (cf. services/eraserOrder.ts).
+    const safeId = layer.id.replace(/[^a-zA-Z0-9-]/g, '');
+    let inner = '';
+    eraserSegments(layer.strokes).forEach((seg, i) => {
+      inner += seg.draws
+        .map(s => strokeToSvgPath(s, s.color, `stroke-width="${s.size}" stroke-opacity="${s.opacity}" stroke-linecap="${strokeLinecap(s.tool)}" stroke-linejoin="round"`))
+        .filter(Boolean)
+        .join('');
+      if (seg.erasers.length === 0) return;
+      const maskId = `thumb-mask-${safeId}-${i}`;
+      const cuts = seg.erasers
         .map(s => strokeToSvgPath(s, 'black', `stroke-width="${s.size}" stroke-linecap="round" stroke-linejoin="round"`))
         .filter(Boolean)
         .join('');
-      group =
+      inner =
         `<defs><mask id="${maskId}" x="0" y="0" width="${canvasWidth}" height="${canvasHeight}">` +
         `<rect x="0" y="0" width="${canvasWidth}" height="${canvasHeight}" fill="white"/>${cuts}` +
-        `</mask></defs><g mask="url(#${maskId})" opacity="${layer.opacity}">${paths}</g>`;
-    } else {
-      group = `<g opacity="${layer.opacity}">${paths}</g>`;
-    }
+        `</mask></defs><g mask="url(#${maskId})">${inner}</g>`;
+    });
+    const group = `<g opacity="${layer.opacity}">${inner}</g>`;
     body.push(group);
 
     // Textes : au-dessus des traits du calque.

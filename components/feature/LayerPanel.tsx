@@ -4,17 +4,34 @@ import { View, StyleSheet, Text, Pressable, ScrollView, TextInput } from 'react-
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { useCanvas } from '@/hooks/useCanvas';
+import { pickImageAsDataUrl } from '@/services/pickImage';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 const LayerPanel: React.FC = () => {
   const {
     layers, layerGroups, activeLayerId, setActiveLayerId,
-    addLayer, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer,
+    addLayer, addPhotoLayer, setActiveTool, removeLayer, toggleLayerVisibility, setLayerOpacity, clearLayer,
     addLayerGroup, renameLayerGroup, removeLayerGroup, toggleGroupCollapsed,
     setLayerGroup, toggleGroupVisibility,
   } = useCanvas();
   const [renamingGroup, setRenamingGroup] = React.useState<string | null>(null);
   const [groupName, setGroupName] = React.useState('');
+  const [addMenu, setAddMenu] = React.useState(false);
+  const [importError, setImportError] = React.useState<string | null>(null);
+
+  const importPhoto = async () => {
+    setAddMenu(false);
+    setImportError(null);
+    try {
+      const img = await pickImageAsDataUrl();
+      if (!img) return;
+      addPhotoLayer(img.src, img.width, img.height);
+      setActiveTool('move');
+    } catch (e) {
+      console.error('[calques] import photo échoué', e);
+      setImportError("Impossible d'importer cette image.");
+    }
+  };
 
   const renderLayer = (layer: (typeof layers)[number]) => {
     const isActive = layer.id === activeLayerId;
@@ -141,12 +158,31 @@ const LayerPanel: React.FC = () => {
           </Pressable>
           <Pressable
             style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
-            onPress={addLayer}
+            onPress={() => setAddMenu(v => !v)}
+            accessibilityLabel="Ajouter un calque"
           >
-            <MaterialCommunityIcons name="plus" size={18} color={Colors.accent} />
+            <MaterialCommunityIcons name={addMenu ? 'close' : 'plus'} size={18} color={Colors.accent} />
           </Pressable>
         </View>
       </View>
+
+      {addMenu && (
+        <View style={styles.addMenu}>
+          <Pressable style={styles.addMenuItem} onPress={() => { setAddMenu(false); addLayer('raster'); }}>
+            <MaterialCommunityIcons name="brush" size={16} color={Colors.accent} />
+            <Text style={styles.addMenuText}>Calque normal</Text>
+          </Pressable>
+          <Pressable style={styles.addMenuItem} onPress={() => { setAddMenu(false); addLayer('vector'); }}>
+            <MaterialCommunityIcons name="vector-curve" size={16} color={Colors.accent} />
+            <Text style={styles.addMenuText}>Calque vectoriel</Text>
+          </Pressable>
+          <Pressable style={styles.addMenuItem} onPress={importPhoto}>
+            <MaterialCommunityIcons name="image-plus" size={16} color={Colors.accent} />
+            <Text style={styles.addMenuText}>Importer une photo</Text>
+          </Pressable>
+        </View>
+      )}
+      {importError && <Text style={styles.addMenuError}>{importError}</Text>}
 
       <View style={styles.list}>
         {layerGroups.map(group => {
@@ -417,6 +453,17 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 30,
   },
+  addMenu: {
+    marginBottom: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    overflow: 'hidden',
+  },
+  addMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 12 },
+  addMenuText: { color: Colors.textPrimary, fontSize: FontSize.sm },
+  addMenuError: { color: Colors.danger, fontSize: FontSize.xs, marginBottom: Spacing.sm },
 });
 
 export default React.memo(LayerPanel);

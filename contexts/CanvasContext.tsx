@@ -272,7 +272,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     setCurrentLassoPoints([]);
   }, []);
 
+  // Si true, endStroke ne commit jamais le trait en cours (un pinch/pan a
+  // pris le relais, éventuellement après qu'un release Android intempestif
+  // ait déjà demandé le commit).
+  const discardStrokeRef = useRef(false);
+
   const beginStroke = useCallback((x: number, y: number, sizeScale = 1) => {
+    discardStrokeRef.current = false;
     smoothPointRef.current = { x, y };
     lastRawPointRef.current = { x, y };
     if (activeTool === 'fill' || activeTool === 'lasso' || activeTool === 'move' || activeTool === 'pick' || activeTool === 'eyedropper' || activeTool === 'rectselect' || activeTool === 'shape' || activeTool === 'text' || activeTool === 'transform') return;
@@ -313,6 +319,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   // deuxième doigt transforme le geste en pinch/pan (le fragment tracé ne
   // doit pas rester sur la toile).
   const cancelStroke = useCallback(() => {
+    discardStrokeRef.current = true;
     setCurrentStroke(null);
     smoothPointRef.current = null;
     lastRawPointRef.current = null;
@@ -323,9 +330,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const endStroke = useCallback(() => {
+    if (discardStrokeRef.current) {
+      setCurrentStroke(null);
+      return;
+    }
     const lastRaw = lastRawPointRef.current;
     setCurrentStroke(prev => {
-      if (!prev || prev.points.length === 0) return null;
+      if (discardStrokeRef.current || !prev || prev.points.length === 0) return null;
       // Stabilisateur actif : la fin du trait rejoint le vrai dernier point
       // du doigt (l'EMA retarde sinon, laissant le geste « inachevé »).
       if (lastRaw && stabilizer > 0 && prev.points.length > 0) {

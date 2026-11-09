@@ -86,6 +86,23 @@ export function shouldCommitStroke(maxTouches: number): boolean {
   return maxTouches < 2;
 }
 
+/**
+ * Faut-il retenir le premier point avant de commencer le trait ?
+ * Sur native, toujours (un pinch commence par un doigt). Sur le web / Electron,
+ * seulement si l'événement ressemble à un toucher (pas une souris) : sinon un
+ * clic dessinerait avec 80 ms de retard.
+ */
+export function shouldDeferStroke(opts: {
+  platformOS: string;
+  touchCount: number;
+  pointerType?: string | null;
+}): boolean {
+  if (opts.platformOS !== 'web') return true;
+  const pt = (opts.pointerType ?? '').toLowerCase();
+  if (pt === 'touch' || pt === 'pen') return true;
+  return opts.touchCount > 0;
+}
+
 /** Curseur horizontal : position (px) → valeur 0..1 bornée. */
 export function sliderValue(x: number, width: number): number {
   if (!(width > 0)) return 0;

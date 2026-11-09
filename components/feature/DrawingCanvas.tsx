@@ -18,7 +18,7 @@ import {
   scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible,
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
-import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke } from '@/services/canvasInput';
+import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke, shouldDeferStroke, STROKE_START_DELAY_MS } from '@/services/canvasInput';
 import { capturePixelSnapshot } from '@/services/pixelSnapshot';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
@@ -235,6 +235,41 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const isDrawing = useRef(false);
   // Trait au doigt pas encore commencé (cf. strokeGate) : points en coord. toile.
   const pendingStroke = useRef<{ t: number; points: { x: number; y: number }[] } | null>(null);
+  // Pointeurs actifs (web / écran tactile) : un 2e doigt n'apparaît pas
+  // toujours dans `touches` du PanResponder.
+  const activePointers = useRef(new Set<number>());
+  // Commit différé : sur Android, poser le 2e doigt déclenche parfois un
+  // `release` du 1er geste *avant* le grant à deux doigts. On attend un
+  // court instant pour pouvoir encore jeter le fragment.
+  const endStrokeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function clearEndStrokeTimer() {
+    if (endStrokeTimer.current) { clearTimeout(endStrokeTimer.current); endStrokeTimer.current = null; }
+  }
+  function discardInProgressStroke() {
+    clearEndStrokeTimer();
+    pendingStroke.current = null;
+    clearLongPressRef.current();
+    isDrawing.current = false;
+    cancelStrokeRef.current();
+    cancelLassoRef.current();
+  }
+  function scheduleEndStroke() {
+    clearEndStrokeTimer();
+    endStrokeTimer.current = setTimeout(() => {
+      endStrokeTimer.current = null;
+      if (!shouldCommitStroke(gestureInfo.current.maxTouches)) {
+        cancelStrokeRef.current();
+        return;
+      }
+      endStrokeRef.current();
+    }, STROKE_START_DELAY_MS);
+  }
+  function flushScheduledEndStroke() {
+    if (!endStrokeTimer.current) return;
+    clearEndStrokeTimer();
+    if (shouldCommitStroke(gestureInfo.current.maxTouches)) endStrokeRef.current();
+    else cancelStrokeRef.current();
+  }
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
   const moveSnapshotTaken = useRef(false);
@@ -592,14 +627,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     g.maxTouches = Math.max(g.maxTouches, touches.length);
     if (!g.midStart) g.midStart = getMidpointPage(touches);
     isPinching.current = true;
-    isDrawing.current = false;
-    pendingStroke.current = null;
     // Pinch : rien ne change dans le dessin → la vue pixélisée reste.
     clearPixelGestureTimer();
     setPixelGestureRef.current(false);
-    clearLongPressRef.current();
-    cancelStrokeRef.current();
-    cancelLassoRef.current();
+    discardInProgressStroke();
     measureEndRef.current(true);
     pinchStartDistance.current = getDistance(touches);
     pinchStartScale.current = lastScale.current;
@@ -633,6 +664,18 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderGrant: (evt) => {
         const touches = evt.nativeEvent.touches;
+        // Un vrai nouveau geste à 1 doigt : on valide le trait précédent
+        // (commit différé). Un geste à 2 doigts jette ce fragment.
+        if (touches.length >= 2) clearEndStrokeTimer();
+        else {
+          flushScheduledEndStroke();
+          // Pointeurs périmés (pointerup manqué) : ne garder que celui-ci,
+          // sinon le prochain trait seul serait pris pour un multi-touch.
+          const pid = (evt.nativeEvent as { pointerId?: number; identifier?: number }).pointerId
+            ?? (evt.nativeEvent as { identifier?: number }).identifier;
+          if (pid != null) activePointers.current = new Set([pid]);
+          else if (activePointers.current.size > 1) activePointers.current.clear();
+        }
         // Vue pixélisée : on ne repasse au Svg en direct QUE pour un geste qui
         // modifie le dessin (trait, gomme, déplacement…), et seulement une
         // fois sûr que ce n'est pas un pinch (délai > attente de 80 ms du
@@ -764,10 +807,15 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
-        // Au doigt, le trait attend ~80 ms : si un 2e doigt arrive, c'était
-        // un pinch/pan et rien n'est tracé. Souris/web : immédiat.
-        if (Platform.OS === 'web') beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
-        else pendingStroke.current = { t: Date.now(), points: [c] };
+        // Au doigt (y compris tactile sur le web / Electron), le trait attend
+        // ~80 ms : si un 2e doigt arrive, c'était un pinch/pan et rien n'est
+        // tracé. Souris : immédiat.
+        const ne = evt.nativeEvent as typeof evt.nativeEvent & { pointerType?: string };
+        if (shouldDeferStroke({ platformOS: Platform.OS, touchCount: ne.touches?.length ?? 0, pointerType: ne.pointerType })) {
+          pendingStroke.current = { t: Date.now(), points: [c] };
+        } else {
+          beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
+        }
         // Appui long → pipette (outils de tracé uniquement).
         clearLongPressRef.current();
         longPressFired.current = false;
@@ -802,9 +850,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         // avant `touches` : on jette le trait sans attendre.
         if (touches.length < 2 && gs.numberActiveTouches >= 2) {
           gestureInfo.current.maxTouches = Math.max(gestureInfo.current.maxTouches, gs.numberActiveTouches);
-          pendingStroke.current = null;
-          clearLongPressRef.current();
-          if (isDrawing.current) { isDrawing.current = false; cancelStrokeRef.current(); cancelLassoRef.current(); }
+          discardInProgressStroke();
           return;
         }
 
@@ -1028,10 +1074,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }
         if (tool !== 'fill' && tool !== 'move') {
           // Un geste qui a vu 2 doigts ne laisse JAMAIS de trait (points noirs).
-          if (!shouldCommitStroke(g.maxTouches)) { pendingStroke.current = null; cancelStrokeRef.current(); return; }
+          if (!shouldCommitStroke(g.maxTouches)) { discardInProgressStroke(); return; }
           // Tap bref à un doigt : le point voulu est tracé.
           if (pendingStroke.current) flushPendingStroke();
-          endStrokeRef.current();
+          // Commit différé : un release Android « fantôme » (2e doigt qui
+          // arrive) peut encore annuler ce fragment via startPinch.
+          scheduleEndStroke();
         }
       },
 
@@ -1048,11 +1096,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         if (activeToolRef.current === 'measure') return;
         // Geste interrompu : un trait en attente ou multi-doigts est jeté.
         if (pendingStroke.current || !shouldCommitStroke(gestureInfo.current.maxTouches)) {
-          pendingStroke.current = null;
-          cancelStrokeRef.current();
-          cancelLassoRef.current();
+          discardInProgressStroke();
           return;
         }
+        clearEndStrokeTimer();
         endStrokeRef.current();
         endLassoRef.current();
       },
@@ -1221,6 +1268,15 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           containerLayout.current = { x: pageX, y: pageY, width: w, height: h };
         });
       }}
+      onPointerDown={(e) => {
+        activePointers.current.add(e.nativeEvent.pointerId);
+        if (activePointers.current.size >= 2) {
+          gestureInfo.current.maxTouches = Math.max(gestureInfo.current.maxTouches, activePointers.current.size);
+          discardInProgressStroke();
+        }
+      }}
+      onPointerUp={(e) => { activePointers.current.delete(e.nativeEvent.pointerId); }}
+      onPointerCancel={(e) => { activePointers.current.delete(e.nativeEvent.pointerId); }}
       {...panResponder.panHandlers}
     >
       <Animated.View style={[{ width, height }, rotationStyle]}>

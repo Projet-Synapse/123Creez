@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   pivotTranslate, screenToZone, zoneToScreen, zoomAboutAnchor,
-  strokeGate, shouldCommitStroke, sliderValue, STROKE_START_DELAY_MS,
+  strokeGate, shouldCommitStroke, shouldDeferStroke, sliderValue, STROKE_START_DELAY_MS,
 } from '../canvasInput';
 import { viewParams, docToScreen } from '../measureMath';
 
@@ -67,6 +67,16 @@ test('shouldCommitStroke : jamais de trait si un 2e doigt est apparu', () => {
   assert.equal(shouldCommitStroke(1), true);
   assert.equal(shouldCommitStroke(2), false);
   assert.equal(shouldCommitStroke(3), false);
+});
+
+test('shouldDeferStroke : doigt partout, souris web en immédiat', () => {
+  assert.equal(shouldDeferStroke({ platformOS: 'android', touchCount: 1 }), true);
+  assert.equal(shouldDeferStroke({ platformOS: 'ios', touchCount: 1 }), true);
+  assert.equal(shouldDeferStroke({ platformOS: 'web', touchCount: 1 }), true);
+  assert.equal(shouldDeferStroke({ platformOS: 'web', touchCount: 0, pointerType: 'touch' }), true);
+  assert.equal(shouldDeferStroke({ platformOS: 'web', touchCount: 0, pointerType: 'pen' }), true);
+  assert.equal(shouldDeferStroke({ platformOS: 'web', touchCount: 0, pointerType: 'mouse' }), false);
+  assert.equal(shouldDeferStroke({ platformOS: 'web', touchCount: 0 }), false);
 });
 
 test('sliderValue borne entre 0 et 1', () => {

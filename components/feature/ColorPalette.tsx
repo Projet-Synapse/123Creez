@@ -4,10 +4,10 @@ import {
   View, StyleSheet, Pressable, Text, ScrollView, TextInput,
   Modal, FlatList, TouchableOpacity, PanResponder,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Circle, Path, G, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { useCanvas } from '@/hooks/useCanvas';
-import { sliderValue } from '@/services/canvasInput';
 import {
   CustomPalette, getRecentColors, saveRecentColors,
   getCustomPalettes, saveCustomPalettes,
@@ -144,42 +144,6 @@ function ColorWheel({ hue, saturation, onHSChange }: {
   );
 }
 
-// ─── Brightness slider ─────────────────────────────────────────────────────────
-// Glisser / toucher n'importe où sur la piste (zone tactile de 32 px de haut).
-// Les enfants sont en pointerEvents="none" : la cible du toucher est toujours
-// la piste, donc locationX est bien relatif à la piste.
-function BrightnessSlider({ value, color, onChange }: {
-  value: number; color: string; onChange: (v: number) => void;
-}) {
-  const widthRef = useRef(0);
-  const startX = useRef(0);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const set = (x: number) => onChangeRef.current(Math.round(sliderValue(x, widthRef.current) * 100) / 100);
-  const pan = useRef(PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderTerminationRequest: () => false,
-    onPanResponderGrant: (evt) => { startX.current = evt.nativeEvent.locationX; set(startX.current); },
-    onPanResponderMove: (_evt, gs) => set(startX.current + gs.dx),
-  })).current;
-  return (
-    <View
-      style={styles.brightnessHit}
-      onLayout={e => { widthRef.current = e.nativeEvent.layout.width; }}
-      accessibilityRole="adjustable"
-      accessibilityLabel="Luminosité"
-      accessibilityValue={{ min: 0, max: 100, now: Math.round(value * 100) }}
-      {...pan.panHandlers}
-    >
-      <View style={styles.brightnessTrack} pointerEvents="none">
-        <View style={[styles.brightnessFill, { width: `${value * 100}%`, backgroundColor: color }]} />
-        <View style={[styles.brightnessThumb, { left: `${value * 100}%` as any }]} />
-      </View>
-    </View>
-  );
-}
-
 // ─── Custom palette storage ───────────────────────────────────────────────────
 
 // ─── Main ColorPalette component ─────────────────────────────────────────────
@@ -229,18 +193,24 @@ const ColorPalette: React.FC = () => {
     });
   }, [setActiveColor]);
 
-  // Color wheel changes
+  // Toujours la dernière HSV : le PanResponder de la roue et le curseur
+  // ne doivent pas figer teinte / sat / valeur d'un rendu précédent.
+  const hsvRef = useRef(hsv);
+  hsvRef.current = hsv;
+
   const handleWheelHS = useCallback((h: number, s: number) => {
-    const newColor = hsvToHex(h, s, hsv[2]);
-    setHsv([h, s, hsv[2]]);
+    const v = hsvRef.current[2];
+    const newColor = hsvToHex(h, s, v);
+    setHsv([h, s, v]);
     selectColor(newColor);
-  }, [hsv, selectColor]);
+  }, [selectColor]);
 
   const handleValueChange = useCallback((v: number) => {
-    const newColor = hsvToHex(hsv[0], hsv[1], v);
-    setHsv([hsv[0], hsv[1], v]);
+    const [h, s] = hsvRef.current;
+    const newColor = hsvToHex(h, s, v);
+    setHsv([h, s, v]);
     selectColor(newColor);
-  }, [hsv, selectColor]);
+  }, [selectColor]);
 
   const applyCustom = () => {
     const hex = customHex.startsWith('#') ? customHex : `#${customHex}`;
@@ -363,7 +333,18 @@ const ColorPalette: React.FC = () => {
             <Text style={styles.sliderLabel}>Luminosité</Text>
             <Text style={styles.sliderVal}>{Math.round(brightness * 100)}%</Text>
           </View>
-          <BrightnessSlider value={brightness} color={hsvToHex(hsv[0], hsv[1], 1)} onChange={handleValueChange} />
+          <Slider
+            style={styles.brightnessSlider}
+            minimumValue={0}
+            maximumValue={1}
+            step={0.01}
+            value={brightness}
+            onValueChange={handleValueChange}
+            minimumTrackTintColor={hsvToHex(hsv[0], hsv[1], 1)}
+            maximumTrackTintColor={Colors.surfaceBorder}
+            thumbTintColor="#ffffff"
+            accessibilityLabel="Luminosité"
+          />
           <View style={styles.brightnessButtons}>
             {[0.1, 0.25, 0.5, 0.75, 1.0].map(v => (
               <Pressable
@@ -565,13 +546,7 @@ const styles = StyleSheet.create({
   },
   sliderLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: '600' },
   sliderVal: { fontSize: FontSize.xs, color: Colors.textSecondary, fontFamily: 'monospace' },
-  brightnessHit: { width: '90%', height: 32, justifyContent: 'center', marginBottom: Spacing.sm },
-  brightnessTrack: {
-    width: '100%', height: 6, backgroundColor: Colors.surfaceBorder,
-    borderRadius: 3,
-  },
-  brightnessFill: { height: '100%', borderRadius: 3 },
-  brightnessThumb: { position: 'absolute', top: -4, width: 14, height: 14, borderRadius: 7, backgroundColor: '#fff', marginLeft: -7 },
+  brightnessSlider: { width: '90%', height: 32, marginBottom: Spacing.sm },
   brightnessButtons: {
     flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm,
   },

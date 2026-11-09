@@ -4,6 +4,8 @@
 appId: com.creez.app
 productName: 123Créez
 copyright: Copyright © 2026 Catelyn2332
+# Icône de l'installeur / de l'exécutable (Windows, Linux, macOS).
+icon: assets/images/logo.png
 
 directories:
   app: desktop
@@ -45,6 +47,7 @@ mac:
   hardenedRuntime: true
 
 win:
+  icon: assets/images/favicon.ico
   target:
     - target: nsis
       arch: [x64]

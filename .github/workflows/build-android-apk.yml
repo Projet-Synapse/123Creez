@@ -117,17 +117,24 @@ jobs:
       # --build-cache : si un essai meurt en cours de route, le suivant
       # réutilise les sorties des tâches déjà réussies (cache local).
       - name: Construire l'APK (essai 1)
+        id: apk1
+        continue-on-error: true
         working-directory: android
         timeout-minutes: 45
         run: ./gradlew --build-cache assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
 
       - name: Construire l'APK (essai 2 après échec)
-        if: failure()
+        id: apk2
+        if: steps.apk1.outcome == 'failure'
         working-directory: android
         timeout-minutes: 45
         run: ./gradlew --build-cache assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon
 
+      # Sans continue-on-error sur l'essai 1, un premier échec (ex. heap Java)
+      # marquait le job en échec : l'essai 2 pouvait réussir, mais « Renommer »
+      # et l'upload étaient sautés (if implicite = success()).
       - name: Renommer l'APK
+        if: steps.apk1.outcome == 'success' || steps.apk2.outcome == 'success'
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk 123Creez.apk
           ls -lh 123Creez.apk

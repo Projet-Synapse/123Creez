@@ -108,17 +108,19 @@ const BrushPanel: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  // Panneau compact : marges réduites ; les curseurs gardent 36 px de haut
+  // pour rester faciles à saisir au doigt.
   container: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
   },
   previewArea: {
     alignItems: 'center',
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.sm,
   },
   previewBg: {
     width: '100%',
-    height: 80,
+    height: 56,
     backgroundColor: '#e8e8e8',
     borderRadius: Radius.md,
     alignItems: 'center',
@@ -136,14 +138,14 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   label: {
-    fontSize: FontSize.xs,
+    fontSize: 10,
     color: Colors.textMuted,
     fontWeight: '600',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0.4,
   },
   value: {
-    fontSize: FontSize.sm,
+    fontSize: FontSize.xs,
     color: Colors.textSecondary,
     fontWeight: '600',
     fontFamily: 'monospace',
@@ -151,17 +153,19 @@ const styles = StyleSheet.create({
   slider: {
     width: '100%',
     height: 36,
-    marginBottom: Spacing.xs,
+    marginBottom: 2,
   },
+  // Les 5 tailles se partagent la largeur (le panneau peut descendre à 150 px).
   presetRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: Spacing.md,
-    paddingHorizontal: Spacing.xs,
+    gap: 4,
+    marginBottom: Spacing.sm,
   },
   presetBtn: {
-    width: 40,
-    height: 40,
+    flex: 1,
+    maxWidth: 40,
+    height: 34,
     borderRadius: Radius.md,
     backgroundColor: Colors.surfaceHigh,
     alignItems: 'center',

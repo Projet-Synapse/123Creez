@@ -60,7 +60,9 @@ function hexToHsv(hex: string): [number, number, number] {
 }
 
 // ─── Color Wheel component ────────────────────────────────────────────────────
-const WHEEL_SIZE = 160;
+// Panneau compact (150 px au plus étroit) : la roue tient dans la largeur
+// utile tout en restant assez grande pour viser au doigt.
+const WHEEL_SIZE = 136;
 const WHEEL_R = WHEEL_SIZE / 2;
 
 function ColorWheel({ hue, saturation, onHSChange }: {
@@ -485,13 +487,13 @@ const ColorPalette: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
+  container: { paddingHorizontal: 6, paddingVertical: Spacing.xs },
   activeRow: {
-    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
-    marginBottom: Spacing.sm, paddingHorizontal: Spacing.xs,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginBottom: 6, paddingHorizontal: 2,
   },
   activeColor: {
-    width: 32, height: 32, borderRadius: Radius.md,
+    width: 28, height: 28, borderRadius: Radius.sm,
     borderWidth: 2, borderColor: Colors.surfaceBorder,
   },
   hexText: {
@@ -500,12 +502,12 @@ const styles = StyleSheet.create({
   },
   hexBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: Colors.surfaceHigh, paddingHorizontal: Spacing.sm,
+    backgroundColor: Colors.surfaceHigh, paddingHorizontal: 6,
     paddingVertical: 5, borderRadius: Radius.sm,
   },
   hexBtnText: { color: Colors.accent, fontSize: FontSize.xs, fontWeight: '700' },
   tabBar: {
-    flexDirection: 'row', marginBottom: Spacing.sm,
+    flexDirection: 'row', marginBottom: 6,
     backgroundColor: Colors.surfaceHigh, borderRadius: Radius.sm, padding: 2,
   },
   tabBtn: {
@@ -515,21 +517,21 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 9, color: Colors.textMuted, fontWeight: '600' },
   tabLabelActive: { color: Colors.accent },
   sectionTitle: {
-    fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: '600',
-    textTransform: 'uppercase', letterSpacing: 0.8,
-    marginBottom: Spacing.xs, marginTop: Spacing.xs,
-    paddingHorizontal: Spacing.xs,
+    fontSize: 10, color: Colors.textMuted, fontWeight: '600',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+    marginBottom: 3, marginTop: 3,
+    paddingHorizontal: 2,
   },
   recentRow: {
     flexDirection: 'row', gap: 4, flexWrap: 'wrap',
-    marginBottom: Spacing.xs, paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.xs, paddingHorizontal: 2,
   },
   colorDot: {
     width: 26, height: 26, borderRadius: Radius.full,
     borderWidth: 1.5, borderColor: Colors.surfaceBorder,
   },
   colorDotActive: { borderColor: Colors.accent, borderWidth: 2.5 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3, paddingHorizontal: Spacing.xs },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3, paddingHorizontal: 2 },
   colorCell: {
     width: 26, height: 26, borderRadius: 5, borderWidth: 1,
     borderColor: Colors.surfaceBorder, alignItems: 'center', justifyContent: 'center',
@@ -538,38 +540,39 @@ const styles = StyleSheet.create({
   whiteCell: { borderColor: '#ccc' },
 
   // Wheel
-  wheelTab: { alignItems: 'center', paddingTop: Spacing.sm },
-  wheelContainer: { width: WHEEL_SIZE, height: WHEEL_SIZE, marginBottom: Spacing.md },
+  wheelTab: { alignItems: 'center', paddingTop: Spacing.xs },
+  wheelContainer: { width: WHEEL_SIZE, height: WHEEL_SIZE, marginBottom: Spacing.sm },
   sliderRow: {
     flexDirection: 'row', justifyContent: 'space-between',
-    width: '100%', paddingHorizontal: Spacing.sm, marginBottom: 4,
+    width: '100%', paddingHorizontal: 2, marginBottom: 2,
   },
   sliderLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: '600' },
   sliderVal: { fontSize: FontSize.xs, color: Colors.textSecondary, fontFamily: 'monospace' },
-  brightnessSlider: { width: '90%', height: 32, marginBottom: Spacing.sm },
+  brightnessSlider: { width: '100%', height: 32, marginBottom: Spacing.xs },
+  // 5 pastilles sur une ligne même au plus étroit (150 px).
   brightnessButtons: {
-    flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm,
+    flexDirection: 'row', gap: 4, marginBottom: 6,
   },
-  bBtn: { width: 28, height: 28, borderRadius: Radius.sm, borderWidth: 1.5, borderColor: 'transparent' },
+  bBtn: { width: 25, height: 28, borderRadius: Radius.sm, borderWidth: 1.5, borderColor: 'transparent' },
   bBtnActive: { borderColor: '#fff' },
   hueStrip: { flexDirection: 'row', gap: 3, flexWrap: 'wrap', justifyContent: 'center' },
   hueBtn: { width: 22, height: 22, borderRadius: 4, borderWidth: 1.5, borderColor: 'transparent' },
   hueBtnActive: { borderColor: '#fff' },
 
   // Custom palettes
-  customTab: { paddingHorizontal: Spacing.xs },
+  customTab: { paddingHorizontal: 2 },
   newPaletteBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: Colors.activeGlow, borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    marginBottom: Spacing.sm, borderWidth: 1, borderColor: Colors.accent,
+    paddingHorizontal: Spacing.sm, paddingVertical: 7,
+    marginBottom: 6, borderWidth: 1, borderColor: Colors.accent,
   },
   newPaletteText: { color: Colors.accent, fontSize: FontSize.sm, fontWeight: '600' },
   emptyText: { color: Colors.textMuted, fontSize: FontSize.xs, lineHeight: 16, textAlign: 'center', paddingVertical: Spacing.md },
   paletteCard: {
     backgroundColor: Colors.surfaceHigh, borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.surfaceBorder,
-    padding: Spacing.sm, marginBottom: Spacing.sm,
+    padding: 6, marginBottom: 6,
   },
   paletteHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs },
   paletteName: { fontSize: FontSize.sm, color: Colors.textPrimary, fontWeight: '600' },

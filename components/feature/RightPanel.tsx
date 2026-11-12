@@ -8,6 +8,7 @@ import LayerPanel from './LayerPanel';
 import AutomationPanel from './AutomationPanel';
 import { useTheme } from '@/hooks/useTheme';
 import { Colors, Spacing } from '@/constants/theme';
+import { editorChromeBg } from '@/services/editorChrome';
 
 type PanelTab = 'color' | 'brush' | 'layers' | 'auto';
 
@@ -38,7 +39,7 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
   if (!visible) return null;
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.panelBg, borderLeftColor: theme.surfaceBorder, width }]}>
+    <View style={[styles.container, { backgroundColor: editorChromeBg(theme.panelBg), borderLeftColor: theme.surfaceBorder, width }]}>
       {/* Tab bar */}
       <View style={[styles.tabBar, { borderBottomColor: theme.surfaceBorder }]}>
         {TABS.map(tab => {
@@ -51,10 +52,15 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
             >
               <MaterialCommunityIcons
                 name={tab.icon as any}
-                size={16}
+                size={15}
                 color={isActive ? theme.accent : theme.textMuted}
               />
-              <Text style={[styles.tabLabel, { color: isActive ? theme.accent : theme.textMuted }]}>
+              <Text
+                style={[styles.tabLabel, { color: isActive ? theme.accent : theme.textMuted }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
                 {tab.label}
               </Text>
             </Pressable>
@@ -83,9 +89,9 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
 };
 
 const styles = StyleSheet.create({
+  // Panneau compact posé au-dessus de la toile : fond translucide donné
+  // par l'éditeur (editorChromeBg), largeur via la prop `width`.
   container: {
-    width: 200,
-    backgroundColor: Colors.panelBg,
     borderLeftWidth: 1,
     borderLeftColor: Colors.surfaceBorder,
   },
@@ -97,8 +103,10 @@ const styles = StyleSheet.create({
   tab: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: Spacing.sm,
-    gap: 2,
+    paddingTop: 5,
+    paddingBottom: 4,
+    paddingHorizontal: 1,
+    gap: 1,
   },
   tabActive: {
     borderBottomWidth: 2,
@@ -106,16 +114,16 @@ const styles = StyleSheet.create({
     marginBottom: -1,
   },
   tabLabel: {
-    fontSize: 8,
+    fontSize: 7.5,
     fontWeight: '600',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   content: {
     flex: 1,
   },
   contentInner: {
-    paddingBottom: 24,
+    paddingBottom: Spacing.md,
   },
 });
 

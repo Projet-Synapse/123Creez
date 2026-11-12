@@ -19,6 +19,9 @@ import ToolBar from '@/components/feature/ToolBar';
 import RightPanel from '@/components/feature/RightPanel';
 import EditorTopBar from '@/components/feature/EditorTopBar';
 import ResizeHandle from '@/components/feature/ResizeHandle';
+import {
+  TOOLBAR_WIDTH, chromeInsets, clampPanelWidth, editorChromeBg,
+} from '@/services/editorChrome';
 import { Tool } from '@/contexts/CanvasContext';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
@@ -28,7 +31,6 @@ const AUTOSAVE_DEBOUNCE_MS = 1200;
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const TOPBAR_HEIGHT = 48;
-const TOOLBAR_WIDTH = 56;
 // 3 curseurs empilés (style IbisPaint X) : 3 × 36 px + marges.
 const BOTTOM_PANEL_HEIGHT = 124;
 
@@ -52,8 +54,9 @@ export default function EditorScreen() {
   // Panneau droit fermé par défaut à l’ouverture d’une toile (non mémorisé).
   const [panelVisible, setPanelVisible] = useState(false);
   // Largeur du panneau droit, réglable par la poignée sur son bord — la
-  // valeur persiste dans les réglages au relâchement du drag.
-  const [panelWidth, setPanelWidth] = useState(settings.editorPanelWidth ?? 200);
+  // valeur persiste dans les réglages au relâchement du drag. Panneau
+  // compact : une largeur sauvée plus large est ramenée dans la plage.
+  const [panelWidth, setPanelWidth] = useState(() => clampPanelWidth(settings.editorPanelWidth));
   const panelWidthRef = useRef(panelWidth);
   panelWidthRef.current = panelWidth;
   // Fond transparent (damier) de CETTE toile — lu du meta au chargement.
@@ -78,7 +81,7 @@ export default function EditorScreen() {
 
   const RIGHTPANEL_WIDTH = panelVisible ? panelWidth : 0;
   const resizePanel = useCallback((delta: number) => {
-    setPanelWidth(Math.min(420, Math.max(150, panelWidthRef.current + delta)));
+    setPanelWidth(clampPanelWidth(panelWidthRef.current + delta));
   }, []);
   const commitPanelWidth = useCallback(() => {
     updateSettings({ editorPanelWidth: panelWidthRef.current });
@@ -92,12 +95,23 @@ export default function EditorScreen() {
     setCanvasTransparentBgState(next);
     setCanvasTransparentBg(id, next);
   }, [id, canvasTransparentBg, setCanvasTransparentBg]);
-  const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
+  // Toile pleine largeur : la barre d'outils et le panneau droit sont posés
+  // AU-DESSUS (fond translucide), ils ne réduisent plus la zone de dessin.
+  const canvasWidth = SCREEN_WIDTH;
   const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom
     - (fullDraw ? 0 : TOPBAR_HEIGHT) - (fullDraw ? 0 : BOTTOM_PANEL_HEIGHT);
   // Honor the "Position de la barre d'outils" setting — the bar docks to the
   // chosen side of the workspace.
   const toolbarRight = settings.toolbarPosition === 'right';
+  // Ce que les barres recouvrent de chaque côté : les boutons flottants
+  // (zoom, plein écran, repli) et le panneau du bas restent hors des barres.
+  const chrome = chromeInsets({
+    toolbarPosition: settings.toolbarPosition,
+    fullDraw,
+    panelVisible,
+    panelWidth: RIGHTPANEL_WIDTH,
+  });
+  const chromeBg = editorChromeBg(theme.panelBg);
 
   const toggleBottom = useCallback(() => {
     const toValue = bottomExpanded ? 0 : 1;
@@ -412,6 +426,7 @@ export default function EditorScreen() {
 
       <View style={styles.workspace}>
         {!fullDraw && !toolbarRight && (
+          <View style={[styles.toolbarOverlay, { left: 0 }]}>
           <ToolBar
             onUndo={undo}
             onRedo={redo}
@@ -424,6 +439,7 @@ export default function EditorScreen() {
             position="left"
           popupMode={settings.toolbarMode ?? 'bar'}
           />
+          </View>
         )}
 
         <View style={styles.centerColumn}>
@@ -434,12 +450,12 @@ export default function EditorScreen() {
             backgroundColor: workspaceBg,
           }]}>
             <View style={styles.canvasContainer}>
-              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} transparentBg={canvasTransparentBg} contentSize={canvasContentSize ? { width: canvasContentSize.w, height: canvasContentSize.h } : undefined} />
+              <DrawingCanvas ref={canvasRef} width={canvasWidth} height={canvasHeight} onZoomChange={setZoomPct} transparentBg={canvasTransparentBg} chromeInsetLeft={chrome.left} contentSize={canvasContentSize ? { width: canvasContentSize.w, height: canvasContentSize.h } : undefined} />
             </View>
 
             {/* Zoom controls — the only way to zoom for mouse/trackpad users,
                 who have no pinch gesture (touch users already have pinch). */}
-            <View style={[styles.zoomControls, { backgroundColor: theme.panelBg, borderColor: theme.surfaceBorder }]}>
+            <View style={[styles.zoomControls, { right: chrome.right + 12, backgroundColor: chromeBg, borderColor: theme.surfaceBorder }]}>
               <Pressable
                 style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
                 onPress={() => canvasRef.current?.zoomOut()}
@@ -476,6 +492,8 @@ export default function EditorScreen() {
           {/* Bottom brush panel (masqué en plein écran) */}
           {!fullDraw && <RNAnimated.View style={[styles.bottomPanel, {
             height: expandedBottomHeight,
+            marginLeft: chrome.left,
+            marginRight: chrome.right,
             backgroundColor: theme.panelBg,
             borderTopColor: theme.surfaceBorder,
           }]}>
@@ -637,6 +655,8 @@ export default function EditorScreen() {
           </RNAnimated.View>}
         </View>
 
+        {/* Panneau droit posé au-dessus de la toile (avec sa poignée). */}
+        <View style={[styles.panelOverlay, { right: chrome.panelRight }]} pointerEvents="box-none">
         {panelVisible && (
           <ResizeHandle
             panelSide="left"
@@ -654,12 +674,13 @@ export default function EditorScreen() {
           canvasId={id}
           width={panelWidth}
         />
+        </View>
 
         {/* Plein écran de dessin : masque barres et panneaux d'un tap. */}
         <Pressable
           style={({ pressed }) => [styles.fullscreenBtn, {
-            right: panelVisible && !fullDraw ? panelWidth + 12 : 12,
-            backgroundColor: theme.panelBg,
+            right: chrome.right + 12,
+            backgroundColor: chromeBg,
             borderColor: theme.surfaceBorder,
           }, pressed && { opacity: 0.7 }]}
           onPress={() => setFullDraw(v => !v)}
@@ -678,7 +699,9 @@ export default function EditorScreen() {
         <Pressable
           style={({ pressed }) => [styles.panelFloatBtn, {
             right: panelVisible ? panelWidth + 12 : 12,
-            backgroundColor: theme.panelBg,
+            // + ce que `right` ne compte pas : poignée et barre d'outils à droite.
+            marginRight: chrome.right - RIGHTPANEL_WIDTH,
+            backgroundColor: chromeBg,
             borderColor: theme.surfaceBorder,
           }, pressed && { opacity: 0.7 }]}
           onPress={() => setPanelVisible(v => !v)}
@@ -693,6 +716,7 @@ export default function EditorScreen() {
         </Pressable>
 
         {toolbarRight && !fullDraw && (
+          <View style={[styles.toolbarOverlay, { right: 0 }]}>
           <ToolBar
             onUndo={undo}
             onRedo={redo}
@@ -705,6 +729,7 @@ export default function EditorScreen() {
             position="right"
           popupMode={settings.toolbarMode ?? 'bar'}
           />
+          </View>
         )}
       </View>
 
@@ -761,7 +786,17 @@ export default function EditorScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   workspace: { flex: 1, flexDirection: 'row' },
-  centerColumn: { flex: 1, flexDirection: 'column' },
+  centerColumn: { flex: 1, flexDirection: 'column', zIndex: 0 },
+  // Barres posées au-dessus de la toile : pas d'elevation (son ombre se
+  // verrait à travers le fond translucide sur Android), juste zIndex.
+  toolbarOverlay: {
+    position: 'absolute', top: 0, bottom: 0, width: TOOLBAR_WIDTH,
+    flexDirection: 'row', zIndex: 20,
+  },
+  panelOverlay: {
+    position: 'absolute', top: 0, bottom: 0,
+    flexDirection: 'row', zIndex: 20,
+  },
   canvasWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   canvasContainer: {
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },

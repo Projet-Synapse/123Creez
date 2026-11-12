@@ -6,6 +6,7 @@ import { useCanvas } from '@/hooks/useCanvas';
 import { useTheme } from '@/hooks/useTheme';
 import { Colors, Spacing, Radius } from '@/constants/theme';
 import { Tool } from '@/contexts/CanvasContext';
+import { editorChromeBg, editorMenuBg } from '@/services/editorChrome';
 
 interface ToolItem {
   id: Tool;
@@ -54,7 +55,7 @@ function ToolPopup({ visible, onClose, theme }: { visible: boolean; onClose: () 
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' }} onPress={onClose}>
         <Pressable
-          style={{ backgroundColor: theme.panelBg, borderWidth: 1, borderColor: theme.surfaceBorder, borderRadius: 16, padding: 10, flexDirection: 'row', flexWrap: 'wrap', maxWidth: 260, gap: 6 }}
+          style={{ backgroundColor: editorMenuBg(theme.panelBg), borderWidth: 1, borderColor: theme.surfaceBorder, borderRadius: 16, padding: 10, flexDirection: 'row', flexWrap: 'wrap', maxWidth: 260, gap: 6 }}
           onStartShouldSetResponder={() => true}
         >
           {TOOLS.map(tool => {
@@ -88,13 +89,16 @@ const ToolBar: React.FC<ToolBarProps> = ({
   const isRight = position === 'right';
   const [popupOpen, setPopupOpen] = useState(false);
   const activeToolMeta = TOOLS.find(t => t.id === activeTool);
+  // Fond translucide (la toile passe dessous) — icônes et libellés restent
+  // pleinement opaques : on ne touche jamais à `opacity` sur la barre.
+  const chromeBg = editorChromeBg(theme.panelBg);
 
   if (popupMode === 'popup') {
     return (
       <>
         <View style={[
           styles.container,
-          { backgroundColor: theme.panelBg },
+          { backgroundColor: chromeBg },
           isRight
             ? { borderLeftWidth: 1, borderLeftColor: theme.surfaceBorder }
             : { borderRightWidth: 1, borderRightColor: theme.surfaceBorder },
@@ -144,7 +148,7 @@ const ToolBar: React.FC<ToolBarProps> = ({
   return (
     <View style={[
       styles.container,
-      { backgroundColor: theme.panelBg },
+      { backgroundColor: chromeBg },
       isRight
         ? { borderLeftWidth: 1, borderLeftColor: theme.surfaceBorder }
         : { borderRightWidth: 1, borderRightColor: theme.surfaceBorder },
@@ -239,7 +243,6 @@ const ToolBar: React.FC<ToolBarProps> = ({
 const styles = StyleSheet.create({
   container: {
     width: 56,
-    backgroundColor: Colors.panelBg,
     paddingVertical: Spacing.md,
     alignItems: 'center',
     gap: Spacing.xs,

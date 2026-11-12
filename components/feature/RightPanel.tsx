@@ -4,37 +4,34 @@ import { View, StyleSheet, Pressable, Text, ScrollView } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import ColorPalette from './ColorPalette';
 import BrushPanel from './BrushPanel';
-import LayerPanel from './LayerPanel';
 import AutomationPanel from './AutomationPanel';
 import { useTheme } from '@/hooks/useTheme';
 import { Colors, Spacing } from '@/constants/theme';
 import { editorChromeBg } from '@/services/editorChrome';
 
-type PanelTab = 'color' | 'brush' | 'layers' | 'auto';
+type PanelTab = 'color' | 'brush' | 'auto';
+type TabId = PanelTab | 'layers';
 
 interface Props {
-  showLayers: boolean;
-  onCloseLayers: () => void;
+  /** Onglet « Calques » : ouvre le panneau FLOTTANT au-dessus de la toile
+      (l'éditeur replie ce panneau latéral pour ne pas réduire la toile). */
+  onOpenLayers: () => void;
   visible: boolean;
   canvasId?: string;
   /** Largeur du panneau (px) — réglable depuis l'éditeur via ResizeHandle. */
   width?: number;
 }
 
-const TABS: { id: PanelTab; icon: string; label: string }[] = [
+const TABS: { id: TabId; icon: string; label: string }[] = [
   { id: 'color', icon: 'palette', label: 'Couleur' },
   { id: 'brush', icon: 'brush', label: 'Pinceau' },
   { id: 'layers', icon: 'layers-outline', label: 'Calques' },
   { id: 'auto', icon: 'robot-outline', label: 'Auto' },
 ];
 
-const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canvasId, width = 200 }) => {
+const RightPanel: React.FC<Props> = ({ onOpenLayers, visible, canvasId, width = 200 }) => {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<PanelTab>('color');
-
-  React.useEffect(() => {
-    if (showLayers) setActiveTab('layers');
-  }, [showLayers]);
 
   if (!visible) return null;
 
@@ -48,7 +45,10 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
             <Pressable
               key={tab.id}
               style={[styles.tab, isActive && [styles.tabActive, { borderBottomColor: theme.accent }]]}
-              onPress={() => setActiveTab(tab.id)}
+              onPress={() => {
+                if (tab.id === 'layers') onOpenLayers();
+                else setActiveTab(tab.id);
+              }}
             >
               <MaterialCommunityIcons
                 name={tab.icon as any}
@@ -81,7 +81,6 @@ const RightPanel: React.FC<Props> = ({ showLayers, onCloseLayers, visible, canva
       >
         {activeTab === 'color' && <ColorPalette />}
         {activeTab === 'brush' && <BrushPanel />}
-        {activeTab === 'layers' && <LayerPanel />}
         {activeTab === 'auto' && <AutomationPanel canvasId={canvasId} />}
       </ScrollView>
     </View>

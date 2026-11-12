@@ -1,17 +1,22 @@
 // Powered by OnSpace.AI
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  View, StyleSheet, Pressable, Text, ScrollView, TextInput,
-  Modal, FlatList, TouchableOpacity, PanResponder,
+  View, StyleSheet, Pressable, Text, TextInput,
+  Modal, PanResponder, LayoutChangeEvent,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Circle, Path, G, Defs, LinearGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Path, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { useCanvas } from '@/hooks/useCanvas';
 import {
   CustomPalette, getRecentColors, saveRecentColors,
   getCustomPalettes, saveCustomPalettes,
 } from '@/services/paletteService';
+import {
+  RGB, HSV, hsvToHex, hexToHsv, hexToHsvKeep, hexToRgb, rgbToHex, normalizeHex,
+  setChannel, angleToHue, hueToPoint, diamondToSv, svToDiamond,
+  wheelGeometry, wheelSizeFor, wheelZone,
+} from '@/services/colorMath';
 import { Colors, Spacing, Radius, FontSize } from '@/constants/theme';
 
 // ─── Color data ───────────────────────────────────────────────────────────────
@@ -26,122 +31,203 @@ const BASE_PALETTE = [
   '#795548', '#607d8b', '#f48fb1', '#80cbc4',
 ];
 
-// ─── HSV / hex utilities ─────────────────────────────────────────────────────
-function hsvToHex(h: number, s: number, v: number): string {
-  const c = v * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = v - c;
-  let r = 0, g = 0, b = 0;
-  if (h < 60) { r = c; g = x; }
-  else if (h < 120) { r = x; g = c; }
-  else if (h < 180) { g = c; b = x; }
-  else if (h < 240) { g = x; b = c; }
-  else if (h < 300) { r = x; b = c; }
-  else { r = c; b = x; }
-  const toHex = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, '0');
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
+// ─── Roue : anneau de teinte + losange saturation / valeur ───────────────────
+// Un seul widget façon IbisPaint : l'anneau règle la teinte, le losange au
+// centre (carré S/V tourné de 45°) règle saturation et valeur. La taille
+// suit la largeur utile du panneau compact (150–248 px). Math dans
+// services/colorMath.ts.
+const RING_SEGMENTS = 72;
 
-function hexToHsv(hex: string): [number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const d = max - min;
-  let h = 0;
-  if (d !== 0) {
-    if (max === r) h = 60 * (((g - b) / d) % 6);
-    else if (max === g) h = 60 * ((b - r) / d + 2);
-    else h = 60 * ((r - g) / d + 4);
-    if (h < 0) h += 360;
-  }
-  const s = max === 0 ? 0 : d / max;
-  return [h, s, max];
-}
-
-// ─── Color Wheel component ────────────────────────────────────────────────────
-// Panneau compact (150 px au plus étroit) : la roue tient dans la largeur
-// utile tout en restant assez grande pour viser au doigt.
-const WHEEL_SIZE = 136;
-const WHEEL_R = WHEEL_SIZE / 2;
-
-function ColorWheel({ hue, saturation, onHSChange }: {
+function ColorWheel({ size, hue, saturation, value, onHueChange, onSvChange }: {
+  size: number;
   hue: number;
   saturation: number;
-  onHSChange: (h: number, s: number) => void;
+  value: number;
+  onHueChange: (h: number) => void;
+  onSvChange: (s: number, v: number) => void;
 }) {
-  const wheelRef = useRef<View>(null);
-  const containerRef = useRef<{ x: number; y: number } | null>(null);
+  const g = useMemo(() => wheelGeometry(size), [size]);
 
-  const computeHS = useCallback((px: number, py: number) => {
-    const dx = px - WHEEL_R;
-    const dy = py - WHEEL_R;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const s = Math.min(dist / WHEEL_R, 1);
-    let h = (Math.atan2(dy, dx) * 180) / Math.PI;
-    if (h < 0) h += 360;
-    onHSChange(h, s);
-  }, [onHSChange]);
+  // Le PanResponder est créé une fois : il lit géométrie et callbacks à jour
+  // via des refs. La zone (anneau / losange) est fixée au toucher et gardée
+  // jusqu'au lâcher : le doigt ne « saute » jamais de l'une à l'autre.
+  const live = useRef({ g, onHueChange, onSvChange });
+  live.current = { g, onHueChange, onSvChange };
+  const zone = useRef<'ring' | 'diamond'>('ring');
 
-  // Le PanResponder est créé une fois : il passe par une ref pour toujours
-  // appeler la version À JOUR de computeHS (sinon la luminosité de départ,
-  // figée dans la 1re closure, écrasait la valeur choisie au curseur).
-  const computeRef = useRef(computeHS);
-  computeRef.current = computeHS;
+  const apply = (px: number, py: number) => {
+    const { g: geo, onHueChange: onH, onSvChange: onSV } = live.current;
+    const dx = px - geo.r;
+    const dy = py - geo.r;
+    if (zone.current === 'ring') {
+      onH(angleToHue(dx, dy));
+    } else {
+      const { s, v } = diamondToSv(dx, dy, geo.half);
+      onSV(s, v);
+    }
+  };
+
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (evt) => {
-      computeRef.current(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+      const { locationX, locationY } = evt.nativeEvent;
+      const geo = live.current.g;
+      zone.current = wheelZone(locationX - geo.r, locationY - geo.r, geo);
+      apply(locationX, locationY);
     },
     onPanResponderMove: (evt) => {
-      computeRef.current(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+      apply(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
     },
   })).current;
 
-  // Build hue ring segments
-  const segments = 60;
-  const paths: React.ReactNode[] = [];
-  for (let i = 0; i < segments; i++) {
-    const angle1 = (i / segments) * 2 * Math.PI;
-    const angle2 = ((i + 1) / segments) * 2 * Math.PI;
-    const x1o = WHEEL_R + WHEEL_R * Math.cos(angle1);
-    const y1o = WHEEL_R + WHEEL_R * Math.sin(angle1);
-    const x2o = WHEEL_R + WHEEL_R * Math.cos(angle2);
-    const y2o = WHEEL_R + WHEEL_R * Math.sin(angle2);
-    const x1i = WHEEL_R + (WHEEL_R - 18) * Math.cos(angle1);
-    const y1i = WHEEL_R + (WHEEL_R - 18) * Math.sin(angle1);
-    const x2i = WHEEL_R + (WHEEL_R - 18) * Math.cos(angle2);
-    const y2i = WHEEL_R + (WHEEL_R - 18) * Math.sin(angle2);
-    const h = (i / segments) * 360;
-    const color = hsvToHex(h, 1, 1);
-    paths.push(
-      <Path
-        key={i}
-        d={`M ${x1o} ${y1o} A ${WHEEL_R} ${WHEEL_R} 0 0 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${WHEEL_R - 18} ${WHEEL_R - 18} 0 0 0 ${x1i} ${y1i} Z`}
-        fill={color}
-      />
-    );
-  }
+  const ring = useMemo(() => {
+    const { r, innerR } = g;
+    const out: React.ReactNode[] = [];
+    for (let i = 0; i < RING_SEGMENTS; i++) {
+      // Léger recouvrement pour éviter les fentes entre segments.
+      const a1 = (i / RING_SEGMENTS) * 2 * Math.PI;
+      const a2 = ((i + 1.15) / RING_SEGMENTS) * 2 * Math.PI;
+      const x1o = r + r * Math.cos(a1), y1o = r + r * Math.sin(a1);
+      const x2o = r + r * Math.cos(a2), y2o = r + r * Math.sin(a2);
+      const x1i = r + innerR * Math.cos(a1), y1i = r + innerR * Math.sin(a1);
+      const x2i = r + innerR * Math.cos(a2), y2i = r + innerR * Math.sin(a2);
+      out.push(
+        <Path
+          key={i}
+          d={`M ${x1o} ${y1o} A ${r} ${r} 0 0 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${innerR} ${innerR} 0 0 0 ${x1i} ${y1i} Z`}
+          fill={hsvToHex((i / RING_SEGMENTS) * 360, 1, 1)}
+        />
+      );
+    }
+    return out;
+  }, [g]);
 
-  // Saturation gradient inside ring — simplified: just show the inner disc
-  const thumbX = WHEEL_R + (saturation * (WHEEL_R - 20)) * Math.cos((hue * Math.PI) / 180);
-  const thumbY = WHEEL_R + (saturation * (WHEEL_R - 20)) * Math.sin((hue * Math.PI) / 180);
+  const { r, half, ringMid } = g;
+  // Sommets du losange (repère SVG) : haut blanc, droite teinte, bas / gauche noirs.
+  const top = { x: r, y: r - half };
+  const right = { x: r + half, y: r };
+  const bottom = { x: r, y: r + half };
+  const left = { x: r - half, y: r };
+  const diamondPath = `M ${top.x} ${top.y} L ${right.x} ${right.y} L ${bottom.x} ${bottom.y} L ${left.x} ${left.y} Z`;
+  const pureHue = hsvToHex(hue, 1, 1);
+
+  const ringThumb = hueToPoint(hue, ringMid);
+  const svThumb = svToDiamond(saturation, value, half);
+  const thumbR = Math.max(6, Math.round((g.r - g.innerR) / 2) - 1);
 
   return (
-    <View style={styles.wheelContainer} {...panResponder.panHandlers}>
-      <Svg width={WHEEL_SIZE} height={WHEEL_SIZE}>
-        {/* Hue ring */}
-        {paths}
-        {/* Inner saturation disc */}
-        <Circle cx={WHEEL_R} cy={WHEEL_R} r={WHEEL_R - 20} fill="white" />
-        <Circle cx={WHEEL_R} cy={WHEEL_R} r={WHEEL_R - 20}
-          fill={hsvToHex(hue, 1, 1)} opacity={saturation} />
-        {/* Thumb */}
-        <Circle cx={thumbX} cy={thumbY} r={6} fill={hsvToHex(hue, saturation, 1)}
-          stroke="white" strokeWidth={2} />
+    <View
+      style={{ width: size, height: size }}
+      {...panResponder.panHandlers}
+      accessibilityLabel="Roue de couleur : anneau de teinte et losange saturation / luminosité"
+    >
+      <Svg width={size} height={size}>
+        <Defs>
+          {/* S : blanc (S 0, arête gauche-haut) → teinte pleine (S 1, arête bas-droite). */}
+          <LinearGradient id="cw-sat" gradientUnits="userSpaceOnUse"
+            x1={left.x} y1={left.y} x2={bottom.x} y2={bottom.y}>
+            <Stop offset="0" stopColor="#ffffff" stopOpacity={1} />
+            <Stop offset="1" stopColor={pureHue} stopOpacity={1} />
+          </LinearGradient>
+          {/* V : voile noir, opaque à V 0 (arête gauche-bas) → nul à V 1 (arête haut-droite). */}
+          <LinearGradient id="cw-val" gradientUnits="userSpaceOnUse"
+            x1={left.x} y1={left.y} x2={top.x} y2={top.y}>
+            <Stop offset="0" stopColor="#000000" stopOpacity={1} />
+            <Stop offset="1" stopColor="#000000" stopOpacity={0} />
+          </LinearGradient>
+        </Defs>
+        {ring}
+        <Path d={diamondPath} fill="url(#cw-sat)" />
+        <Path d={diamondPath} fill="url(#cw-val)" />
+        {/* Curseur de teinte sur l'anneau */}
+        <Circle cx={r + ringThumb.x} cy={r + ringThumb.y} r={thumbR}
+          fill="none" stroke="#ffffff" strokeWidth={2.5} />
+        <Circle cx={r + ringThumb.x} cy={r + ringThumb.y} r={thumbR + 1.5}
+          fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={1} />
+        {/* Curseur S/V dans le losange */}
+        <Circle cx={r + svThumb.x} cy={r + svThumb.y} r={6}
+          fill={hsvToHex(hue, saturation, value)} stroke="#ffffff" strokeWidth={2} />
+        <Circle cx={r + svThumb.x} cy={r + svThumb.y} r={7.5}
+          fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={1} />
       </Svg>
+    </View>
+  );
+}
+
+// ─── Curseurs RVB ────────────────────────────────────────────────────────────
+const RGB_ROWS: { ch: 0 | 1 | 2; label: string; tint: string }[] = [
+  { ch: 0, label: 'R', tint: '#ff3b3b' },
+  { ch: 1, label: 'V', tint: '#2ee65a' },
+  { ch: 2, label: 'B', tint: '#3b6bff' },
+];
+
+/** Bouton − / + : un pas au toucher, puis répétition tant qu'on maintient. */
+function StepButton({ icon, label, onStep }: {
+  icon: 'minus' | 'plus';
+  label: string;
+  onStep: () => void;
+}) {
+  const stepRef = useRef(onStep);
+  stepRef.current = onStep;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repeat = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stop = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    if (repeat.current) clearInterval(repeat.current);
+    timer.current = null;
+    repeat.current = null;
+  }, []);
+  useEffect(() => stop, [stop]);
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
+      hitSlop={4}
+      accessibilityLabel={label}
+      onPressIn={() => {
+        stop();
+        stepRef.current();
+        timer.current = setTimeout(() => {
+          repeat.current = setInterval(() => stepRef.current(), 45);
+        }, 380);
+      }}
+      onPressOut={stop}
+    >
+      <MaterialCommunityIcons name={icon} size={12} color={Colors.textPrimary} />
+    </Pressable>
+  );
+}
+
+function RgbSliders({ rgb, onChannel, onNudge }: {
+  rgb: RGB;
+  onChannel: (ch: 0 | 1 | 2, value: number) => void;
+  onNudge: (ch: 0 | 1 | 2, delta: number) => void;
+}) {
+  return (
+    <View style={styles.rgbBlock}>
+      {RGB_ROWS.map(({ ch, label, tint }) => (
+        <View key={ch} style={styles.rgbRow}>
+          <Text style={[styles.rgbLabel, { color: tint }]}>{label}</Text>
+          <Text style={styles.rgbVal}>{rgb[ch]}</Text>
+          <StepButton icon="minus" label={`${label} moins 1`}
+            onStep={() => onNudge(ch, -1)} />
+          <Slider
+            style={styles.rgbSlider}
+            minimumValue={0}
+            maximumValue={255}
+            step={1}
+            value={rgb[ch]}
+            onValueChange={(n) => onChannel(ch, n)}
+            minimumTrackTintColor={tint}
+            maximumTrackTintColor={Colors.surfaceBorder}
+            thumbTintColor="#ffffff"
+            accessibilityLabel={`Canal ${label}`}
+          />
+          <StepButton icon="plus" label={`${label} plus 1`}
+            onStep={() => onNudge(ch, 1)} />
+        </View>
+      ))}
     </View>
   );
 }
@@ -156,8 +242,11 @@ const ColorPalette: React.FC = () => {
   const [customHex, setCustomHex] = useState('');
   const [recentColors, setRecentColors] = useState<string[]>([]);
 
-  // Wheel state
-  const [hsv, setHsv] = useState<[number, number, number]>(() => hexToHsv(activeColor));
+  // Roue : HSV gardé en flottants (pas re-déduit du hex arrondi) pour que
+  // les curseurs ne tremblent pas, et pour garder H / S sur gris et noir.
+  const [hsv, setHsv] = useState<HSV>(() => hexToHsv(activeColor));
+  const [wheelWidth, setWheelWidth] = useState(0);
+  const rgb = useMemo(() => hexToRgb(activeColor), [activeColor]);
 
   // Custom palettes
   const [customPalettes, setCustomPalettes] = useState<CustomPalette[]>([]);
@@ -184,11 +273,15 @@ const ColorPalette: React.FC = () => {
     if (hydrated.current) saveCustomPalettes(customPalettes);
   }, [customPalettes]);
 
-  const selectColor = useCallback((color: string) => {
+  // Dernière couleur choisie, à jour sans attendre le rendu (les boutons
+  // ± répétés et la roue enchaînent plusieurs changements par frame).
+  const lastHexRef = useRef(activeColor);
+
+  const selectColor = useCallback((color: string, nextHsv?: HSV) => {
+    lastHexRef.current = color;
     setActiveColor(color);
-    try {
-      setHsv(hexToHsv(color));
-    } catch {}
+    if (nextHsv) setHsv(nextHsv);
+    else setHsv(prev => hexToHsvKeep(color, prev));
     setRecentColors(prev => {
       const filtered = prev.filter(c => c !== color);
       return [color, ...filtered].slice(0, 8);
@@ -200,19 +293,48 @@ const ColorPalette: React.FC = () => {
   const hsvRef = useRef(hsv);
   hsvRef.current = hsv;
 
-  const handleWheelHS = useCallback((h: number, s: number) => {
-    const v = hsvRef.current[2];
-    const newColor = hsvToHex(h, s, v);
-    setHsv([h, s, v]);
-    selectColor(newColor);
+  // Couleur changée ailleurs (pipette, autre panneau) : la roue suit.
+  useEffect(() => {
+    const hex = normalizeHex(activeColor);
+    if (!hex) return;
+    lastHexRef.current = hex;
+    const [h, s, v] = hsvRef.current;
+    if (hsvToHex(h, s, v) !== hex) setHsv(prev => hexToHsvKeep(hex, prev));
+  }, [activeColor]);
+
+  // Anneau : ne change que H.
+  const handleHue = useCallback((h: number) => {
+    const [, s, v] = hsvRef.current;
+    const next: HSV = [h, s, v];
+    hsvRef.current = next;
+    selectColor(hsvToHex(h, s, v), next);
   }, [selectColor]);
 
-  const handleValueChange = useCallback((v: number) => {
-    const [h, s] = hsvRef.current;
-    const newColor = hsvToHex(h, s, v);
-    setHsv([h, s, v]);
-    selectColor(newColor);
+  // Losange : ne change que S et V.
+  const handleSv = useCallback((s: number, v: number) => {
+    const h = hsvRef.current[0];
+    const next: HSV = [h, s, v];
+    hsvRef.current = next;
+    selectColor(hsvToHex(h, s, v), next);
   }, [selectColor]);
+
+  // RVB : un canal, puis hex → HSV (en gardant H / S si besoin).
+  const handleChannel = useCallback((ch: 0 | 1 | 2, value: number) => {
+    const cur = hexToRgb(lastHexRef.current);
+    const next = setChannel(cur, ch, value);
+    if (next[ch] === cur[ch]) return;
+    selectColor(rgbToHex(next));
+  }, [selectColor]);
+
+  const handleNudge = useCallback((ch: 0 | 1 | 2, delta: number) => {
+    const cur = hexToRgb(lastHexRef.current);
+    handleChannel(ch, cur[ch] + delta);
+  }, [handleChannel]);
+
+  const onWheelTabLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.floor(e.nativeEvent.layout.width);
+    setWheelWidth(prev => (prev === w ? prev : w));
+  }, []);
 
   const applyCustom = () => {
     const hex = customHex.startsWith('#') ? customHex : `#${customHex}`;
@@ -253,8 +375,6 @@ const ColorPalette: React.FC = () => {
     setCustomPalettes(prev => prev.filter(p => p.id !== id));
     if (editingPalette?.id === id) setEditingPalette(null);
   };
-
-  const brightness = hsv[2];
 
   return (
     <View style={styles.container}>
@@ -327,48 +447,16 @@ const ColorPalette: React.FC = () => {
 
       {/* ── Color Wheel tab ── */}
       {tab === 'wheel' && (
-        <View style={styles.wheelTab}>
-          <ColorWheel hue={hsv[0]} saturation={hsv[1]} onHSChange={handleWheelHS} />
-
-          {/* Brightness slider */}
-          <View style={styles.sliderRow}>
-            <Text style={styles.sliderLabel}>Luminosité</Text>
-            <Text style={styles.sliderVal}>{Math.round(brightness * 100)}%</Text>
-          </View>
-          <Slider
-            style={styles.brightnessSlider}
-            minimumValue={0}
-            maximumValue={1}
-            step={0.01}
-            value={brightness}
-            onValueChange={handleValueChange}
-            minimumTrackTintColor={hsvToHex(hsv[0], hsv[1], 1)}
-            maximumTrackTintColor={Colors.surfaceBorder}
-            thumbTintColor="#ffffff"
-            accessibilityLabel="Luminosité"
+        <View style={styles.wheelTab} onLayout={onWheelTabLayout}>
+          <ColorWheel
+            size={wheelWidth > 0 ? wheelSizeFor(wheelWidth) : 136}
+            hue={hsv[0]}
+            saturation={hsv[1]}
+            value={hsv[2]}
+            onHueChange={handleHue}
+            onSvChange={handleSv}
           />
-          <View style={styles.brightnessButtons}>
-            {[0.1, 0.25, 0.5, 0.75, 1.0].map(v => (
-              <Pressable
-                key={v}
-                style={[styles.bBtn, { backgroundColor: hsvToHex(hsv[0], hsv[1], v) },
-                  Math.abs(brightness - v) < 0.05 && styles.bBtnActive]}
-                onPress={() => handleValueChange(v)}
-              />
-            ))}
-          </View>
-
-          {/* Preset hue strip */}
-          <View style={styles.hueStrip}>
-            {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map(h => (
-              <Pressable
-                key={h}
-                style={[styles.hueBtn, { backgroundColor: hsvToHex(h, 1, 1) },
-                  Math.abs(hsv[0] - h) < 15 && styles.hueBtnActive]}
-                onPress={() => handleWheelHS(h, hsv[1])}
-              />
-            ))}
-          </View>
+          <RgbSliders rgb={rgb} onChannel={handleChannel} onNudge={handleNudge} />
         </View>
       )}
 
@@ -540,24 +628,20 @@ const styles = StyleSheet.create({
   whiteCell: { borderColor: '#ccc' },
 
   // Wheel
-  wheelTab: { alignItems: 'center', paddingTop: Spacing.xs },
-  wheelContainer: { width: WHEEL_SIZE, height: WHEEL_SIZE, marginBottom: Spacing.sm },
-  sliderRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    width: '100%', paddingHorizontal: 2, marginBottom: 2,
+  wheelTab: { alignItems: 'center', paddingTop: 2 },
+  // RVB : 3 lignes compactes, tiennent dès 150 px de panneau.
+  rgbBlock: { width: '100%', marginTop: 6, gap: 2 },
+  rgbRow: { flexDirection: 'row', alignItems: 'center', gap: 2, height: 28 },
+  rgbLabel: { width: 9, fontSize: 10, fontWeight: '800', textAlign: 'center' },
+  rgbVal: {
+    width: 22, fontSize: 10, color: Colors.textSecondary,
+    fontFamily: 'monospace', textAlign: 'right',
   },
-  sliderLabel: { fontSize: FontSize.xs, color: Colors.textMuted, fontWeight: '600' },
-  sliderVal: { fontSize: FontSize.xs, color: Colors.textSecondary, fontFamily: 'monospace' },
-  brightnessSlider: { width: '100%', height: 32, marginBottom: Spacing.xs },
-  // 5 pastilles sur une ligne même au plus étroit (150 px).
-  brightnessButtons: {
-    flexDirection: 'row', gap: 4, marginBottom: 6,
+  stepBtn: {
+    width: 22, height: 22, borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceHigh, alignItems: 'center', justifyContent: 'center',
   },
-  bBtn: { width: 25, height: 28, borderRadius: Radius.sm, borderWidth: 1.5, borderColor: 'transparent' },
-  bBtnActive: { borderColor: '#fff' },
-  hueStrip: { flexDirection: 'row', gap: 3, flexWrap: 'wrap', justifyContent: 'center' },
-  hueBtn: { width: 22, height: 22, borderRadius: 4, borderWidth: 1.5, borderColor: 'transparent' },
-  hueBtnActive: { borderColor: '#fff' },
+  rgbSlider: { flex: 1, height: 28, marginHorizontal: -4 },
 
   // Custom palettes
   customTab: { paddingHorizontal: 2 },

@@ -19,7 +19,8 @@ import {
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
 import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke, shouldDeferStroke, STROKE_START_DELAY_MS } from '@/services/canvasInput';
-import { capturePixelSnapshot } from '@/services/pixelSnapshot';
+import { capturePixelSnapshot, type PixelSnapshot } from '@/services/pixelSnapshot';
+import type { RasterScene } from '@/services/pixelRaster';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
 import {
@@ -1178,28 +1179,56 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const floating = !!selection && (selection.offset.x !== 0 || selection.offset.y !== 0);
 
   // ─── Vue pixélisée (affichage seul) ───────────────────────────────
-  // Un instantané raster du Svg, à raison d'un pixel par pixel de document,
-  // est agrandi sans lissage par-dessus le Svg quand le zoom dépasse le
-  // seuil. Pendant un geste (tracé, pinch…) on revient au Svg en direct.
+  // Un instantané raster de la toile, à raison d'un pixel par pixel de
+  // document, est agrandi sans lissage par-dessus le Svg quand le zoom
+  // dépasse le seuil. Pendant un geste (tracé, pinch…) on revient au Svg en
+  // direct.
   const svgWrapRef = useRef<View>(null);
-  const [pixelSnap, setPixelSnap] = useState<string | null>(null);
+  const [pixelSnap, setPixelSnap] = useState<PixelSnapshot | null>(null);
   const docW = contentSize?.width ?? width;
   const docH = contentSize?.height ?? height;
   const pixelMode = settings.zoomRendering ?? 'smooth';
   const pixelEligible = pixelViewEligible(pixelMode, zoomForPixel, docW, docH) && width > 0 && height > 0;
+  // Description de la toile pour l'instantané natif (redessinée par Skia à
+  // docW × docH px, cf. services/pixelSnapshot.ts) : mêmes éléments, dans
+  // le même ordre que le Svg ci-dessous. Lue au moment de la capture.
+  const pixelSceneRef = useRef<RasterScene | null>(null);
+  {
+    const transformImg = activeTool === 'transform' && transformSel === 0
+      ? layers.find(l => l.id === activeLayerId)?.images?.[0]
+      : undefined;
+    const fitK = Math.max(0.0001, Math.min(width / docW, height / docH));
+    const lineK = Math.max(0.0001, Math.min(width / docW, 1));
+    pixelSceneRef.current = {
+      docW, docH,
+      background: transparentBg === true
+        ? (hideCheckerForCapture ? { kind: 'none' } : { kind: 'checker' })
+        : (isTransparent ? { kind: 'checker' } : { kind: 'color', color: bgColor }),
+      grid: showGrid ? overlayColor : null,
+      dots: showDots ? overlayColor : null,
+      layers,
+      activeLayerId,
+      selection: selection ? { points: selection.points, offset: selection.offset } : null,
+      transformBox: transformImg
+        ? { x: transformImg.x, y: transformImg.y, w: transformImg.width, h: transformImg.height, color: activeColor, strokeWidth: 2 / lineK, handleR: 14 / fitK }
+        : null,
+    };
+  }
   // Le contenu change → l'instantané est périmé (on n'affiche jamais un
   // ancien état du dessin, quitte à montrer la vue lisse un instant).
   useEffect(() => {
     setPixelSnap(null);
-  }, [layers, selection, width, height, docW, docH, transparentBg, hideCheckerForCapture, settings.canvasBg, settings.showGrid, pixelMode]);
+  }, [layers, selection, width, height, docW, docH, transparentBg, hideCheckerForCapture, settings.canvasBg, settings.showGrid, pixelMode, activeTool, transformSel, activeLayerId, activeColor]);
   useEffect(() => {
     if (!pixelEligible || pixelGesture || pixelSuppressed || pixelSnap) return;
+    const scene = pixelSceneRef.current;
+    if (!scene) return;
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        // Natif : capture à la taille native, réduite en Nearest dans
-        // PixelatedView. Web : la toile à docW × docH, sans lissage.
-        const snap = await capturePixelSnapshot(svgWrapRef.current, docW, docH);
+        // Natif : toile redessinée par Skia à docW × docH px, photos en
+        // plus proche voisin. Web : le Svg à docW × docH, sans lissage.
+        const snap = await capturePixelSnapshot({ node: svgWrapRef.current, scene });
         if (!cancelled && snap) setPixelSnap(snap);
       } catch {
         // Échec de capture : on reste simplement en vue lisse.

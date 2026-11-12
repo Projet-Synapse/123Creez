@@ -7,26 +7,10 @@ import React from 'react';
 import { Svg, Path, Rect, Defs, Mask, G, Pattern, Ellipse, Text as SvgText, Image as SvgImage } from 'react-native-svg';
 import { StrokePath, LayerImage } from '@/contexts/CanvasContext';
 import { eraserSegments } from '@/services/eraserOrder';
+import { buildSvgPath } from '@/services/strokePath';
 
-export function buildSvgPath(stroke: StrokePath, dx = 0, dy = 0): string {
-  if (stroke.tool === 'fill') return '';
-  const pts = stroke.points;
-  if (pts.length === 0) return '';
-  if (pts.length === 1) {
-    return `M ${pts[0].x + dx} ${pts[0].y + dy} L ${pts[0].x + dx + 0.1} ${pts[0].y + dy + 0.1}`;
-  }
-  let d = `M ${pts[0].x + dx} ${pts[0].y + dy}`;
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i - 1];
-    const curr = pts[i];
-    const mx = (prev.x + curr.x) / 2 + dx;
-    const my = (prev.y + curr.y) / 2 + dy;
-    d += ` Q ${prev.x + dx} ${prev.y + dy} ${mx} ${my}`;
-  }
-  const last = pts[pts.length - 1];
-  d += ` L ${last.x + dx} ${last.y + dy}`;
-  return d;
-}
+// Réexporté : DrawingCanvas l'importe d'ici.
+export { buildSvgPath };
 
 function getStrokeLinecap(tool: string): 'round' | 'square' | 'butt' {
   if (tool === 'pencil') return 'square';

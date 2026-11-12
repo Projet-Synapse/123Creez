@@ -17,6 +17,8 @@ import { useAutomation } from '@/hooks/useAutomation';
 import DrawingCanvas, { DrawingCanvasHandle } from '@/components/feature/DrawingCanvas';
 import ToolBar from '@/components/feature/ToolBar';
 import RightPanel from '@/components/feature/RightPanel';
+import LayerPanel from '@/components/feature/LayerPanel';
+import { floatingPanelSize } from '@/services/layerPanelLayout';
 import EditorTopBar from '@/components/feature/EditorTopBar';
 import ResizeHandle from '@/components/feature/ResizeHandle';
 import { Tool } from '@/contexts/CanvasContext';
@@ -76,7 +78,17 @@ export default function EditorScreen() {
   const brushSizeRef = useRef(brushSize);
   brushSizeRef.current = brushSize;
 
+  // Les calques ne vivent PAS dans le panneau droit : ils flottent au-dessus
+  // de la toile, donc `showLayers` n'entre pas dans ce calcul.
   const RIGHTPANEL_WIDTH = panelVisible ? panelWidth : 0;
+  const closeLayers = useCallback(() => setShowLayers(false), []);
+  const toggleLayers = useCallback(() => setShowLayers(v => !v), []);
+  // Onglet « Calques » du panneau droit : ouvre le flottant et replie le
+  // panneau latéral — sinon il resterait ouvert pour rien et réduirait la toile.
+  const openLayersFromSidebar = useCallback(() => {
+    setShowLayers(true);
+    setPanelVisible(false);
+  }, []);
   const resizePanel = useCallback((delta: number) => {
     setPanelWidth(Math.min(420, Math.max(150, panelWidthRef.current + delta)));
   }, []);
@@ -95,6 +107,7 @@ export default function EditorScreen() {
   const canvasWidth = SCREEN_WIDTH - TOOLBAR_WIDTH - RIGHTPANEL_WIDTH;
   const canvasHeight = SCREEN_HEIGHT - insets.top - insets.bottom
     - (fullDraw ? 0 : TOPBAR_HEIGHT) - (fullDraw ? 0 : BOTTOM_PANEL_HEIGHT);
+  const layersFloat = floatingPanelSize(canvasWidth, canvasHeight);
   // Honor the "Position de la barre d'outils" setting — the bar docks to the
   // chosen side of the workspace.
   const toolbarRight = settings.toolbarPosition === 'right';
@@ -416,7 +429,7 @@ export default function EditorScreen() {
             onUndo={undo}
             onRedo={redo}
             onClear={handleClear}
-            onLayersToggle={() => setShowLayers(v => !v)}
+            onLayersToggle={toggleLayers}
             onPanelToggle={() => setPanelVisible(v => !v)}
             panelVisible={panelVisible}
             canUndo={history.length > 0 || !!selection}
@@ -471,6 +484,30 @@ export default function EditorScreen() {
                 <MaterialCommunityIcons name="fit-to-page" size={15} color={theme.textSecondary} />
               </Pressable>
             </View>
+
+            {/* Calques : panneau FLOTTANT au-dessus de la toile (façon
+                IbisPaint). La toile garde sa largeur pleine ; un tap à côté
+                de la carte la referme. La barre d'outils reste utilisable. */}
+            {showLayers && !fullDraw && (
+              <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                <Pressable
+                  style={StyleSheet.absoluteFill}
+                  onPress={closeLayers}
+                  accessibilityLabel="Fermer les calques"
+                />
+                <View
+                  style={[styles.layersFloat, { width: layersFloat.width, left: Math.max(0, Math.round((canvasWidth - layersFloat.width) / 2)) }]}
+                  pointerEvents="box-none"
+                >
+                  <LayerPanel
+                    onClose={closeLayers}
+                    contentWidth={canvasContentSize?.w ?? canvasWidth}
+                    contentHeight={canvasContentSize?.h ?? canvasHeight}
+                    maxHeight={layersFloat.maxHeight}
+                  />
+                </View>
+              </View>
+            )}
           </View>
 
           {/* Bottom brush panel (masqué en plein écran) */}
@@ -648,8 +685,7 @@ export default function EditorScreen() {
         )}
 
         <RightPanel
-          showLayers={showLayers}
-          onCloseLayers={() => setShowLayers(false)}
+          onOpenLayers={openLayersFromSidebar}
           visible={panelVisible}
           canvasId={id}
           width={panelWidth}
@@ -675,7 +711,7 @@ export default function EditorScreen() {
 
         {/* Replier/déplier le panneau depuis la zone de dessin — accessible
             sans viser la barre d'outils quand on dessine. */}
-        <Pressable
+        {!showLayers && <Pressable
           style={({ pressed }) => [styles.panelFloatBtn, {
             right: panelVisible ? panelWidth + 12 : 12,
             backgroundColor: theme.panelBg,
@@ -690,14 +726,14 @@ export default function EditorScreen() {
             size={20}
             color={theme.textSecondary}
           />
-        </Pressable>
+        </Pressable>}
 
         {toolbarRight && !fullDraw && (
           <ToolBar
             onUndo={undo}
             onRedo={redo}
             onClear={handleClear}
-            onLayersToggle={() => setShowLayers(v => !v)}
+            onLayersToggle={toggleLayers}
             onPanelToggle={() => setPanelVisible(v => !v)}
             panelVisible={panelVisible}
             canUndo={history.length > 0 || !!selection}
@@ -782,6 +818,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
     zIndex: 30,
+  },
+  layersFloat: {
+    position: 'absolute',
+    bottom: 8,
+    zIndex: 40,
   },
   zoomControls: {
     position: 'absolute', bottom: 12, right: 12,

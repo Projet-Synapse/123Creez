@@ -26,6 +26,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
 import { CanvasMeta, Folder, FolderPreviewMode, loadCanvas } from '@/services/vaultService';
 import CanvasThumb from '@/components/feature/CanvasThumb';
+import { meetFitRect } from '@/services/gestureMath';
 
 const FOLDER_COLORS = ['#4ecdc4', '#ff6b6b', '#ffd700', '#6bcb77', '#7c4dff', '#ff8800', '#00b0ff', '#f48fb1'];
 
@@ -234,46 +235,65 @@ const CanvasCard = React.memo(function CanvasCard({
       style={[styles.canvasCell, { width: cellWidth }, isDragging && { opacity: 0.35 }]}
       onLayout={measure}
     >
-      <View style={styles.canvasCard}>
+      <View style={styles.cardBody}>
         {/* Gesture area: thumb + texts. The menu button stays OUTSIDE so its
             press is never swallowed by the drag responder. */}
         <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
+          {/* Vignette : l'œuvre entière, rien par-dessus (à la IbisPaint). */}
           <View style={[styles.canvasFrame, { height: thumbH }, isHovered && { borderColor: theme.accent, borderWidth: 2 }]}>
             <CanvasThumb meta={item} width={thumbW} height={thumbH} fit="none" />
           </View>
-          {renamingName !== null ? (
-            <TextInput
-              style={styles.inlineInput}
-              value={renamingName}
-              onChangeText={onRenameChange}
-              onSubmitEditing={onRenameSubmit}
-              onBlur={onRenameSubmit}
-              autoFocus
-            />
-          ) : (
-            <Text style={styles.canvasName} numberOfLines={1}>{item.name}</Text>
-          )}
-          <Text style={styles.canvasMetaLine}>
-            {new Date(item.updatedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
-            {' · '}{item.width} × {item.height}
-          </Text>
+          {/* Titre + date + dimensions SOUS la vignette. */}
+          <View style={styles.cardCaption}>
+            {renamingName !== null ? (
+              <TextInput
+                style={styles.inlineInput}
+                value={renamingName}
+                onChangeText={onRenameChange}
+                onSubmitEditing={onRenameSubmit}
+                onBlur={onRenameSubmit}
+                autoFocus
+              />
+            ) : (
+              <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+            )}
+            <Text style={styles.cardSubtitle} numberOfLines={1}>
+              {new Date(item.updatedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
+              {' · '}{item.width} × {item.height}
+            </Text>
+          </View>
         </View>
-        <Pressable style={styles.cardMoreBtn} onPress={onMenu} hitSlop={8}>
-          <MaterialCommunityIcons name="dots-vertical" size={16} color="#444" />
+        {/* Bulle « ⋮ » à côté du titre : elle ne cache plus l'image. */}
+        <Pressable style={styles.cardMoreBtn} onPress={onMenu} hitSlop={8} accessibilityLabel={`Options de la toile ${item.name}`}>
+          <MaterialCommunityIcons name="dots-vertical" size={18} color={theme.textSecondary} />
         </Pressable>
       </View>
     </View>
   );
 });
 
-// ─── Folder card: per-folder preview mode ─────────────────────────────────────
+// ─── Folder card: stacked frame + per-folder preview mode ─────────────────────
+// Comme dans IbisPaint : un cadre « pile de feuilles » (deux feuilles
+// décalées derrière), l'aperçu ENTIER à l'intérieur, et le nom + le nombre
+// de toiles SOUS le cadre — rien ne recouvre l'aperçu.
+const FOLDER_STACK_OFFSET = 4;   // décalage entre deux feuilles
+const FOLDER_STACK_SHEETS = 2;   // feuilles visibles derrière le cadre
+const FOLDER_FRAME_PAD = 6;      // marge intérieure du cadre avant l'aperçu
+
+/** Couleur du dossier en semi-transparence (#rrggbb → #rrggbbaa). */
+function tint(color: string | undefined, alpha: string, fallback: string): string {
+  return color && /^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : fallback;
+}
+
 const FolderCard = React.memo(function FolderCard({
-  item, previewThumbs, count, isActive, isDropTarget, insertSide, isDragging, styles, theme,
+  item, previewThumbs, count, cellW, isActive, isDropTarget, insertSide, isDragging, styles, theme,
   onTap, onMenu, onDragStart, onDragMove, onDragEnd, registerLayout, registerMeasurer,
 }: {
   item: Folder;
   previewThumbs: CanvasMeta[];
   count: number;
+  /** Largeur de la colonne (px) : même rythme que les toiles. */
+  cellW: number;
   isActive: boolean;
   isDropTarget: boolean;
   /** Barre d'insertion (réordonnancement) à gauche / à droite de la carte. */
@@ -304,65 +324,98 @@ const FolderCard = React.memo(function FolderCard({
   const mode: FolderPreviewMode = item.previewMode ?? 'recent';
   const hasPreview = count > 0;
 
-  const body = !hasPreview || mode === 'classic' ? (
-    <MaterialCommunityIcons name="folder" size={30} color={item.color} />
-  ) : mode === 'mosaic' ? (
-    <View style={styles.folderMosaic}>
-      {[0, 1, 2, 3].map(i => {
-        const t = previewThumbs[i];
-        return t
-          ? <CanvasThumb key={t.id} meta={t} style={styles.folderMosaicCell} />
-          : <View key={i} style={[styles.folderMosaicCell, styles.folderMosaicEmpty]} />;
-      })}
-    </View>
-  ) : (
-    previewThumbs[0]
-      ? <CanvasThumb meta={previewThumbs[0]} style={styles.folderPreviewImg} />
-      : null
-  );
+  // Géométrie : la pile occupe un carré de la largeur de la colonne ; la
+  // feuille de devant laisse la place aux feuilles décalées derrière.
+  const stackShift = FOLDER_STACK_OFFSET * FOLDER_STACK_SHEETS;
+  const frontW = Math.max(1, cellW - stackShift);
+  const innerW = Math.max(1, frontW - 2 * FOLDER_FRAME_PAD - 2);
+  const sheetBorder = tint(item.color, '66', theme.surfaceBorder);
 
-  const showScrim = hasPreview && mode !== 'classic';
+  let body: React.ReactNode;
+  if (!hasPreview || mode === 'classic') {
+    body = <MaterialCommunityIcons name="folder" size={Math.round(innerW * 0.42)} color={item.color} />;
+  } else if (mode === 'mosaic') {
+    body = (
+      <View style={styles.folderMosaic}>
+        {[0, 1, 2, 3].map(i => {
+          const t = previewThumbs[i];
+          return (
+            <View key={t?.id ?? i} style={styles.folderMosaicCell}>
+              {t
+                ? <CanvasThumb meta={t} style={styles.folderMosaicThumb} />
+                : <View style={[styles.folderMosaicThumb, styles.folderMosaicEmpty]} />}
+            </View>
+          );
+        })}
+      </View>
+    );
+  } else {
+    // Dernière toile, ENTIÈRE (pas rognée), centrée dans le cadre.
+    const t = previewThumbs[0];
+    if (t) {
+      const r = t.width > 0 && t.height > 0 ? meetFitRect(innerW, innerW, t.width, t.height) : { w: innerW, h: innerW };
+      body = (
+        <View style={styles.folderPreviewSheet}>
+          <CanvasThumb meta={t} width={Math.max(1, Math.round(r.w))} height={Math.max(1, Math.round(r.h))} fit="none" />
+        </View>
+      );
+    } else body = null;
+  }
 
   return (
     <View
       ref={viewRef}
       onLayout={measure}
-      style={isDragging ? { opacity: 0.35 } : undefined}
+      style={[styles.cardBody, isDragging ? { opacity: 0.35 } : undefined]}
     >
       <View {...gestures.panHandlers}>
-      {insertSide && (
-        <View pointerEvents="none" style={[styles.folderInsertBar, insertSide === 'before' ? { left: -8 } : { right: -8 }, { backgroundColor: theme.accent }]} />
-      )}
-      <View
-        style={[
-          styles.folderCard,
-          isActive && { borderColor: item.color, borderWidth: 2 },
-          isDropTarget && { borderColor: theme.accent, borderWidth: 3, backgroundColor: theme.activeGlow },
-        ]}>
-        {isDropTarget && (
-          <View pointerEvents="none" style={styles.folderDropBadge}>
-            <MaterialCommunityIcons name="folder-download" size={12} color="#0d0d0d" />
-            <Text style={styles.folderDropBadgeText}>Ranger ici</Text>
-          </View>
+        {insertSide && (
+          <View pointerEvents="none" style={[styles.folderInsertBar, insertSide === 'before' ? { left: -8 } : { right: -8 }, { backgroundColor: theme.accent }]} />
         )}
-        {body}
-        {showScrim && (
-          <View style={styles.folderScrim}>
+        <View style={{ width: cellW, height: cellW }}>
+          {/* Feuilles empilées derrière (la plus reculée d'abord). */}
+          {Array.from({ length: FOLDER_STACK_SHEETS }, (_, k) => {
+            const depth = FOLDER_STACK_SHEETS - k; // 2, 1
+            return (
+              <View
+                key={depth}
+                pointerEvents="none"
+                style={[
+                  styles.folderSheet,
+                  { left: depth * FOLDER_STACK_OFFSET, top: depth * FOLDER_STACK_OFFSET, width: frontW, height: frontW, borderColor: sheetBorder },
+                ]}
+              />
+            );
+          })}
+          {/* Feuille de devant : l'aperçu, sans rien par-dessus. */}
+          <View
+            style={[
+              styles.folderCard,
+              { width: frontW, height: frontW, borderColor: sheetBorder },
+              isActive && { borderColor: item.color, borderWidth: 2 },
+              isDropTarget && { borderColor: theme.accent, borderWidth: 3, backgroundColor: theme.activeGlow },
+            ]}>
+            <View style={styles.folderInner}>{body}</View>
+            {isDropTarget && (
+              <View pointerEvents="none" style={styles.folderDropBadge}>
+                <MaterialCommunityIcons name="folder-download" size={12} color="#0d0d0d" />
+                <Text style={styles.folderDropBadgeText}>Ranger ici</Text>
+              </View>
+            )}
+          </View>
+        </View>
+        {/* Nom + nombre de toiles SOUS le cadre, comme le titre d'une toile. */}
+        <View style={styles.cardCaption}>
+          <View style={styles.folderTitleRow}>
             <MaterialCommunityIcons name="folder" size={13} color={item.color} />
-            <Text style={styles.folderNameOnImage} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
           </View>
-        )}
-        {!showScrim && (
-          <Text style={styles.folderName} numberOfLines={2}>{item.name}</Text>
-        )}
-        <Text style={[styles.folderCount, showScrim && styles.folderCountOverlay]}>
-          {count} toile{count !== 1 ? 's' : ''}
-        </Text>
+          <Text style={styles.cardSubtitle} numberOfLines={1}>{count} toile{count !== 1 ? 's' : ''}</Text>
+        </View>
       </View>
-      </View>
-      {/* Même bulle « ⋮ » que les toiles, hors de la zone de glisser. */}
+      {/* Même bulle « ⋮ » que les toiles, à côté du nom, hors de la zone de glisser. */}
       <Pressable style={styles.cardMoreBtn} onPress={onMenu} hitSlop={8} accessibilityLabel={`Options du dossier ${item.name}`}>
-        <MaterialCommunityIcons name="dots-vertical" size={16} color="#444" />
+        <MaterialCommunityIcons name="dots-vertical" size={18} color={theme.textSecondary} />
       </Pressable>
     </View>
   );
@@ -532,10 +585,11 @@ export default function VaultScreen() {
   const colW = Math.floor((contentW - numColumns * GRID_GAP) / numColumns);
   // L'aperçu épouse le ratio de la toile (portrait haut, paysage bas),
   // borné pour que les formats extrêmes restent lisibles. La base est la
-  // largeur RÉELLE du cadre (colW - 18 : padding 8×2 + bordures) — sinon
-  // le ratio du cadre diffère de celui du contenu et l'image se déforme.
+  // largeur RÉELLE du cadre (colW - 2 : bordures, la carte n'a plus de
+  // padding) — sinon le ratio du cadre diffère de celui du contenu et
+  // l'image se déforme.
   const thumbHFor = useCallback((item: CanvasMeta) => {
-    const thumbW = colW - 18;
+    const thumbW = colW - 2;
     const aspect = item.width > 0 ? item.width / item.height : 1;
     return Math.round(Math.min(thumbW * 2.2, Math.max(thumbW * 0.55, thumbW / aspect)));
   }, [colW]);
@@ -814,7 +868,7 @@ export default function VaultScreen() {
     <CanvasCard
       {...makeCanvasCardProps(item)}
       thumbH={thumbHFor(item)}
-      thumbW={colW - 18}
+      thumbW={colW - 2}
       cellWidth={colW + GRID_GAP}
       styles={styles}
       theme={theme}
@@ -833,6 +887,7 @@ export default function VaultScreen() {
     return (
       <FolderCard
         {...makeFolderCardProps(item, contained.slice(0, 4), contained.length)}
+        cellW={colW}
         isActive={activeFolderId === item.id}
         isDropTarget={!!(drag?.active && hoverFolderId === item.id)}
         insertSide={drag?.active && drag.kind === 'folder' && folderInsert?.targetId === item.id ? folderInsert.side : null}
@@ -843,7 +898,7 @@ export default function VaultScreen() {
         registerMeasurer={measurerFor(`folder:${item.id}`)}
       />
     );
-  }, [canvases, makeFolderCardProps, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor]);
+  }, [canvases, makeFolderCardProps, colW, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor]);
 
   const gridItems: GridItem[] = [
     ...rootFolders.map(folder => ({ kind: 'folder' as const, folder })),
@@ -1386,53 +1441,53 @@ function makeStyles(theme: any) {
       gap: 3, paddingVertical: 2, borderRadius: 8, backgroundColor: theme.accent,
     },
     folderDropBadgeText: { fontSize: 10, fontWeight: '700', color: '#0d0d0d' },
-    // Folder cards — per-folder preview (recent / mosaic / classic)
+    // Folder cards — cadre empilé, aperçu (recent / mosaic / classic) dedans
+    folderSheet: {
+      position: 'absolute', borderRadius: 14, borderWidth: 1,
+      backgroundColor: theme.surfaceHigh,
+    },
     folderCard: {
-      width: '100%', aspectRatio: 1, borderRadius: 14, backgroundColor: theme.cardBg,
-      borderWidth: 1, borderColor: theme.surfaceBorder, alignItems: 'center', justifyContent: 'center', gap: 6,
-      overflow: 'hidden',
+      position: 'absolute', left: 0, top: 0, borderRadius: 14, borderWidth: 1,
+      backgroundColor: theme.cardBg, padding: 6, overflow: 'hidden',
     },
-    folderPreviewImg: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
-    folderMosaic: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0, flexDirection: 'row', flexWrap: 'wrap' },
-    folderMosaicCell: { width: '50%', height: '50%' },
-    folderMosaicEmpty: { backgroundColor: 'rgba(0,0,0,0.08)' },
-    folderScrim: {
-      position: 'absolute', left: 0, right: 0, bottom: 20,
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 8, paddingVertical: 4,
+    folderInner: {
+      flex: 1, borderRadius: 9, overflow: 'hidden', backgroundColor: theme.surfaceHigh,
+      alignItems: 'center', justifyContent: 'center',
     },
-    folderNameOnImage: { fontSize: 12, color: '#ffffff', fontWeight: '600', flex: 1 },
-    folderCountOverlay: {
-      position: 'absolute', left: 6, top: 6, bottom: 'auto',
-      backgroundColor: 'rgba(0,0,0,0.55)', color: '#ffffff',
-      paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10, overflow: 'hidden',
+    folderPreviewSheet: {
+      // Ombre légère : la toile se lit comme une feuille posée dans le cadre.
+      backgroundColor: '#ffffff', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.35, shadowRadius: 2, elevation: 2,
     },
-    folderName: { fontSize: 12, color: theme.textPrimary, fontWeight: '600', textAlign: 'center', paddingHorizontal: 6 },
-    folderCount: { fontSize: 10, color: theme.textMuted },
-    // Canvas grid cards — a real framed preview with the title below
+    folderMosaic: { width: '100%', height: '100%', flexDirection: 'row', flexWrap: 'wrap', padding: 1 },
+    folderMosaicCell: { width: '50%', height: '50%', padding: 1 },
+    folderMosaicThumb: { flex: 1, borderRadius: 4 },
+    folderMosaicEmpty: { backgroundColor: 'rgba(255,255,255,0.04)' },
+    folderTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, maxWidth: '100%' },
+    // Canvas grid cards — l'œuvre seule dans son cadre, le titre dessous
     canvasGrid: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
-    canvasCell: { paddingHorizontal: GRID_GAP / 2, marginBottom: GRID_GAP },
-    canvasCard: {
-      backgroundColor: theme.cardBg, borderRadius: 14, padding: 8,
-      borderWidth: 1, borderColor: theme.surfaceBorder,
-    },
+    canvasCell: { paddingHorizontal: GRID_GAP / 2, marginBottom: GRID_GAP + 4 },
+    // Corps commun (toile / dossier) : la bulle « ⋮ » s'y positionne.
+    cardBody: { position: 'relative' },
     canvasFrame: {
-      borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: theme.surfaceBorder,
-      backgroundColor: theme.surfaceHigh, marginBottom: 8,
+      borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.surfaceBorder,
+      backgroundColor: theme.surfaceHigh,
     },
+    // Légende sous la vignette, centrée ; marges latérales pour la bulle « ⋮ ».
+    cardCaption: { alignItems: 'center', paddingTop: 6, paddingHorizontal: 22, minHeight: 38 },
+    cardTitle: { fontSize: 13, color: theme.textPrimary, fontWeight: '600', textAlign: 'center', flexShrink: 1 },
+    cardSubtitle: { fontSize: 10, color: theme.textMuted, textAlign: 'center', marginTop: 2 },
     canvasThumbImg: { width: '100%', height: '100%' },
     canvasThumbPlaceholder: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
     thumbInfo: { alignItems: 'center', gap: 2 },
     thumbStrokeCount: { fontSize: 13, color: '#555', fontWeight: '700' },
     thumbDims: { fontSize: 8, color: '#888' },
     cardMoreBtn: {
-      position: 'absolute', top: 4, right: 4,
-      width: 24, height: 24, borderRadius: 12,
-      backgroundColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center',
+      // À droite de la légende, sous la vignette : n'avale pas le geste de la
+      // carte et ne cache pas l'aperçu.
+      position: 'absolute', right: -2, bottom: 6,
+      width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
     },
-    canvasName: { fontSize: 13, color: theme.textPrimary, fontWeight: '600', marginBottom: 2 },
-    canvasMetaLine: { fontSize: 10, color: theme.textMuted },
-    inlineInput: { fontSize: 13, color: theme.textPrimary, fontWeight: '600', borderBottomWidth: 1, borderBottomColor: theme.accent, paddingVertical: 0 },
+    inlineInput: { alignSelf: 'stretch', fontSize: 13, color: theme.textPrimary, fontWeight: '600', textAlign: 'center', borderBottomWidth: 1, borderBottomColor: theme.accent, paddingVertical: 0 },
     emptyState: { alignItems: 'center', paddingTop: 60, paddingBottom: 40, gap: 10 },
     emptyTitle: { fontSize: 18, color: theme.textSecondary, fontWeight: '600' },
     emptySubtitle: { fontSize: 14, color: theme.textMuted, textAlign: 'center' },

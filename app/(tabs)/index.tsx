@@ -1,6 +1,10 @@
 // Powered by OnSpace.AI
 import { effectiveFolderId } from '@/services/syncDecide';
 import { canNestFolder, folderDropZone, folderPath, reorderAround } from '@/services/folderTree';
+import {
+  CARD_DRAG_HOLD_MS, allowTermination, decideMove, decideRelease, isMouseEvent,
+  scrollEnabledWhileDragging, shouldBlockNativeResponder, shouldStartDragOnHold,
+} from '@/services/cardGesture';
 import { SyncPausedBanner } from '@/components/feature/SyncJournal';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
@@ -81,6 +85,8 @@ const GRID_GAP = 10;
 //    doigt, puis on la promène. Un mouvement AVANT l'appui long est un
 //    scroll : la carte rend la main au défilement et ne fait rien d'autre ;
 //  - souris : le glisser démarre dès que le pointeur bouge (bureau).
+// Les décisions (seuil, appui long, tap / scroll / glisser) vivent dans
+// services/cardGesture.ts, testé à part.
 // Callbacks through refs to dodge stale closures.
 interface CardGesturesOpts {
   onTap: () => void;
@@ -88,8 +94,6 @@ interface CardGesturesOpts {
   onDragMove: (x: number, y: number) => void;
   onDragEnd: () => void;
 }
-
-const CARD_DRAG_HOLD_MS = 450;
 
 function useCardGestures(opts: CardGesturesOpts) {
   const cb = useRef(opts);
@@ -100,6 +104,7 @@ function useCardGestures(opts: CardGesturesOpts) {
   const last = useRef({ x: 0, y: 0 });
   const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clear = () => { if (lpTimer.current) { clearTimeout(lpTimer.current); lpTimer.current = null; } };
+  const state = () => ({ isMouse: isMouse.current, dragging: dragging.current, cancelled: cancelled.current });
   const beginDrag = () => {
     if (dragging.current) return;
     dragging.current = true;
@@ -112,15 +117,23 @@ function useCardGestures(opts: CardGesturesOpts) {
     onStartShouldSetPanResponderCapture: (e: GestureResponderEvent) => {
       // Mouse: claim immediately (the wheel scrolls, and nested Pressables
       // would otherwise hold the responder and block the steal on move).
-      return ((e.nativeEvent as any)?.type ?? '').startsWith('mouse');
+      return isMouseEvent(e.nativeEvent);
     },
     // Touch: claim on finger-down TOO — sans ça, un tap immobile n'était
     // jamais remis à la carte (release non reçue) et n'ouvrait rien sur
-    // Android ; le scroll repasse par TerminationRequest.
+    // Android.
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => false,
+    // …mais au doigt, SANS bloquer le geste natif : par défaut PanResponder
+    // demande à Android d'interdire au ScrollView parent d'intercepter le
+    // doigt (requestDisallowInterceptTouchEvent), d'où l'angle mort — on ne
+    // pouvait pas défiler en commençant sur une carte. Ici le ScrollView
+    // reste libre : dès que le doigt bouge, il défile et interrompt la carte
+    // (onPanResponderTerminate). Pendant un glisser, la galerie coupe son
+    // défilement (scrollEnabled) pour ne pas voler la carte.
+    onShouldBlockNativeResponder: (e: GestureResponderEvent) => shouldBlockNativeResponder(isMouseEvent(e.nativeEvent)),
     onPanResponderGrant: (e: GestureResponderEvent) => {
-      isMouse.current = ((e.nativeEvent as any)?.type ?? '').startsWith('mouse');
+      isMouse.current = isMouseEvent(e.nativeEvent);
       dragging.current = false;
       cancelled.current = false;
       last.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
@@ -128,22 +141,22 @@ function useCardGestures(opts: CardGesturesOpts) {
       if (!isMouse.current) {
         lpTimer.current = setTimeout(() => {
           lpTimer.current = null;
-          if (!cancelled.current) beginDrag();
+          if (shouldStartDragOnHold(state())) beginDrag();
         }, CARD_DRAG_HOLD_MS);
       }
     },
     onPanResponderMove: (e, g) => {
       last.current = { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY };
-      if (!dragging.current && !cancelled.current && Math.hypot(g.dx, g.dy) > 8) {
-        if (isMouse.current) beginDrag();
-        else { cancelled.current = true; clear(); } // bougé trop tôt : c'est un scroll
-      }
+      const decision = decideMove(state(), g.dx, g.dy);
+      if (decision === 'startDrag') beginDrag();
+      else if (decision === 'scroll') { cancelled.current = true; clear(); } // bougé trop tôt : c'est un scroll
       if (dragging.current) cb.current.onDragMove(last.current.x, last.current.y);
     },
     onPanResponderRelease: () => {
       clear();
-      if (dragging.current) cb.current.onDragEnd();
-      else if (!cancelled.current) cb.current.onTap();
+      const decision = decideRelease(state());
+      if (decision === 'drop') cb.current.onDragEnd();
+      else if (decision === 'tap') cb.current.onTap();
       dragging.current = false;
     },
     onPanResponderTerminate: () => {
@@ -155,7 +168,7 @@ function useCardGestures(opts: CardGesturesOpts) {
       dragging.current = false;
     },
     // Le défilement garde la main tant que la carte n'a pas « décollé ».
-    onPanResponderTerminationRequest: () => !dragging.current,
+    onPanResponderTerminationRequest: () => allowTermination(state()),
   })).current;
 }
 
@@ -917,7 +930,13 @@ export default function VaultScreen() {
         </View>
       )}
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      {/* Le défilement est coupé seulement pendant un glisser-déposer : les
+          cartes ne bloquent plus le geste natif au doigt (voir useCardGestures). */}
+      <ScrollView
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={scrollEnabledWhileDragging(!!drag)}
+      >
         {isSearching ? (
           <>
             <View style={styles.sectionHeader}>

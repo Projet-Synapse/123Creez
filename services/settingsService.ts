@@ -1,5 +1,6 @@
 // Powered by OnSpace.AI
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { PANEL_WIDTH_DEFAULT } from './editorChrome';
 
 export type ThemeMode = 'dark' | 'oled' | 'light';
 export type CanvasBg = 'white' | 'black' | 'transparent' | 'grid' | 'dots';
@@ -99,7 +100,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoFullscreen: false,
   realtimeThumbnail: false,
   language: 'fr',
-  editorPanelWidth: 200,
+  // Panneau droit compact (la plage de la poignée est dans editorChrome).
+  editorPanelWidth: PANEL_WIDTH_DEFAULT,
   settingsNavWidth: 160,
   // Performance
   hiDpiRendering: true,

@@ -101,7 +101,7 @@ const AutomationPanel: React.FC<Props> = ({ canvasId }) => {
               size={16}
               color={recording ? '#ff4444' : theme.accent}
             />
-            <Text style={[styles.actionBtnText, { color: recording ? '#ff4444' : theme.accent }]}>
+            <Text style={[styles.actionBtnText, { color: recording ? '#ff4444' : theme.accent }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
               {recording ? 'Arrêter' : 'Enregistrer'}
             </Text>
           </Pressable>
@@ -110,7 +110,7 @@ const AutomationPanel: React.FC<Props> = ({ canvasId }) => {
             onPress={() => setShowTemplates(true)}
           >
             <MaterialCommunityIcons name="lightning-bolt-outline" size={16} color={theme.textSecondary} />
-            <Text style={[styles.actionBtnText, { color: theme.textSecondary }]}>Modèles</Text>
+            <Text style={[styles.actionBtnText, { color: theme.textSecondary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>Modèles</Text>
           </Pressable>
         </View>
 
@@ -248,8 +248,8 @@ function makeStyles(theme: any) {
     container: { flex: 1 },
     recordingBanner: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      backgroundColor: '#ff444422', borderRadius: 8, margin: 8,
-      padding: 8, borderWidth: 1, borderColor: '#ff4444',
+      backgroundColor: '#ff444422', borderRadius: 8, margin: 6,
+      padding: 6, borderWidth: 1, borderColor: '#ff4444',
     },
     recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff4444' },
     recText: { flex: 1, fontSize: 11, color: '#ff6666', fontWeight: '600' },
@@ -259,24 +259,26 @@ function makeStyles(theme: any) {
     },
     recStopText: { fontSize: 11, color: '#fff', fontWeight: '700' },
     recCancelBtn: { padding: 2 },
-    actionRow: { flexDirection: 'row', gap: 8, padding: 8 },
+    // Panneau compact : 2 boutons côte à côte même à 150 px (libellé réduit
+    // au besoin), hauteur gardée pour le doigt.
+    actionRow: { flexDirection: 'row', gap: 6, padding: 6 },
     actionBtn: {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-      gap: 6, paddingVertical: 8, borderRadius: 10,
+      gap: 4, paddingVertical: 8, paddingHorizontal: 4, borderRadius: 8,
       backgroundColor: theme.surfaceHigh, borderWidth: 1, borderColor: theme.surfaceBorder,
     },
     actionBtnActive: { borderColor: '#ff4444' },
-    actionBtnText: { fontSize: 12, fontWeight: '600' },
-    emptyState: { alignItems: 'center', paddingVertical: 32, gap: 6 },
+    actionBtnText: { fontSize: 11, fontWeight: '600', flexShrink: 1 },
+    emptyState: { alignItems: 'center', paddingVertical: 16, paddingHorizontal: 6, gap: 4 },
     emptyText: { fontSize: 14, color: theme.textSecondary, fontWeight: '600' },
     emptyHint: { fontSize: 11, color: theme.textMuted, textAlign: 'center' },
     autoCard: {
-      flexDirection: 'row', alignItems: 'center', gap: 8,
-      marginHorizontal: 8, marginBottom: 6,
-      backgroundColor: theme.cardBg, borderRadius: 10,
-      padding: 10, borderWidth: 1, borderColor: theme.surfaceBorder,
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      marginHorizontal: 6, marginBottom: 4,
+      backgroundColor: theme.cardBg, borderRadius: 8,
+      padding: 6, borderWidth: 1, borderColor: theme.surfaceBorder,
     },
-    autoIcon: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    autoIcon: { width: 26, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
     autoName: { fontSize: 12, color: theme.textPrimary, fontWeight: '600' },
     autoTrigger: { fontSize: 10, color: theme.textMuted, marginTop: 1 },
     runBtn: {

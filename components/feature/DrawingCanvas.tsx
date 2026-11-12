@@ -49,6 +49,9 @@ interface Props {
   // chargée), le canvas s'ajuste tout seul si elle dépasse la zone — sans
   // dépendre d'un appel extérieur par ref (timing de montage non garanti).
   contentSize?: { width: number; height: number };
+  // Largeur recouverte à gauche par la barre d'outils posée au-dessus de la
+  // toile : l'indicateur d'angle se décale pour rester visible.
+  chromeInsetLeft?: number;
 }
 
 // Imperative handle exposed via ref so parent screens (e.g. the editor's
@@ -115,7 +118,7 @@ function CheckerBg({ width, height }: { width: number; height: number }) {
 }
 
 // ─── DrawingCanvas ────────────────────────────────────────────────────────────
-const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg, contentSize }, ref) => {
+const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, onZoomChange, transparentBg, contentSize, chromeInsetLeft = 0 }, ref) => {
   const {
     layers, currentStroke, beginStroke, continueStroke, endStroke, cancelStroke, cancelLasso,
     undo, redo,
@@ -1493,7 +1496,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       {rotationDeg !== 0 && !pixelSuppressed && (
         <Pressable
           onPress={() => { applyRotation(0); bumpMeasureView(); }}
-          style={({ pressed }) => [rotStyles.badge, { backgroundColor: theme.panelBg, borderColor: theme.surfaceBorder }, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [rotStyles.badge, { left: 10 + chromeInsetLeft, backgroundColor: theme.panelBg, borderColor: theme.surfaceBorder }, pressed && { opacity: 0.7 }]}
           hitSlop={6}
           accessibilityLabel={`Vue tournée de ${rotationDeg}°, appuyer pour remettre à 0°`}
         >

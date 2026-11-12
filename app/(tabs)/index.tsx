@@ -1,7 +1,6 @@
 // Powered by OnSpace.AI
 import { effectiveFolderId } from '@/services/syncDecide';
 import { canNestFolder, folderDropZone, folderPath, reorderAround } from '@/services/folderTree';
-import { meetFitRect } from '@/services/gestureMath';
 import { SyncPausedBanner } from '@/components/feature/SyncJournal';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
@@ -23,6 +22,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
 import { CanvasMeta, Folder, FolderPreviewMode, loadCanvas } from '@/services/vaultService';
 import CanvasThumb from '@/components/feature/CanvasThumb';
+import { meetFitRect } from '@/services/gestureMath';
 
 const FOLDER_COLORS = ['#4ecdc4', '#ff6b6b', '#ffd700', '#6bcb77', '#7c4dff', '#ff8800', '#00b0ff', '#f48fb1'];
 

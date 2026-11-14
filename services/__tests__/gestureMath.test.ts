@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clampSensitivity, scalePan, scalePinchRatio, scaleZoomStep,
-  pixelViewEligible, meetFitRect,
+  pixelViewEligible, pixelZoomEligible, PIXEL_VIEW_MIN_ZOOM_PCT, meetFitRect,
 } from '../gestureMath';
 
 test('sensibilité 1 = comportement d\'origine', () => {
@@ -40,9 +40,38 @@ test('pinch symétrique', () => {
 test('éligibilité vue pixélisée', () => {
   assert.equal(pixelViewEligible('smooth', 4, 100, 100), false);
   assert.equal(pixelViewEligible(undefined, 4, 100, 100), false);
-  assert.equal(pixelViewEligible('pixelated', 1, 100, 100), false);
+  assert.equal(pixelViewEligible('pixelated', 1, 100, 100), true);
+  assert.equal(pixelViewEligible('pixelated', 0.9, 100, 100), false);
   assert.equal(pixelViewEligible('pixelated', 2, 100, 100), true);
   assert.equal(pixelViewEligible('pixelated', 2, 5000, 5000), false);
+});
+
+test('seuil de la vue pixélisée : nette dès 100 %, lisse en dessous', () => {
+  assert.equal(PIXEL_VIEW_MIN_ZOOM_PCT, 100);
+  assert.equal(pixelZoomEligible(1), true);
+  assert.equal(pixelZoomEligible(1.01), true);
+  assert.equal(pixelZoomEligible(10), true);
+  assert.equal(pixelZoomEligible(0.99), false);
+  assert.equal(pixelZoomEligible(0.5), false);
+  assert.equal(pixelZoomEligible(0.3), false);
+  assert.equal(pixelZoomEligible(Number.NaN), false);
+  assert.equal(pixelZoomEligible(Number.POSITIVE_INFINITY), false);
+});
+
+test('seuil : même arrondi que le libellé « NN % » (notePixelZoom)', () => {
+  // notePixelZoom garde Math.round(z * 100) / 100 ; le libellé affiche
+  // Math.round(z * 100). La vue est nette SI ET SEULEMENT SI le libellé
+  // montre au moins 100 %, y compris après l'arrondi au centième.
+  for (let i = 0; i <= 4000; i++) {
+    const z = 0.3 + i * 0.000437;
+    const label = Math.round(z * 100);
+    const stored = Math.round(z * 100) / 100;
+    assert.equal(pixelZoomEligible(stored), label >= 100, `z=${z}`);
+    assert.equal(pixelZoomEligible(z), label >= 100, `z=${z}`);
+  }
+  // Ancien arrondi au demi (Math.round(z * 2) / 2) : 1,24 donnait 1 et
+  // 0,76 donnait 1 aussi. Plus de saut de ce genre.
+  assert.equal(pixelZoomEligible(Math.round(0.76 * 100) / 100), false);
 });
 
 test('meetFitRect', () => {

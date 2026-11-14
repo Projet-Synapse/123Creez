@@ -184,6 +184,75 @@ export function planDocRaster(scene: RasterScene): RasterOp[] {
   return ops;
 }
 
+// ─── Reconstruction incrémentale ──────────────────────────────────────
+// Après un trait, refaire TOUT le raster (chaque trait relu, chaque photo
+// redessinée) coûte cher sur un petit téléphone, et la vue reste lisse
+// pendant ce temps. Quand c'est SÛR, on se contente de dessiner les traits
+// ajoutés par-dessus le raster précédent. Sinon : rendu complet.
+
+function sameBackground(a: RasterScene['background'], b: RasterScene['background']): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind !== 'color' || a.color === (b as { color: string }).color;
+}
+
+/** Ce qui, dans un calque, change son rendu (le nom, le groupe… non). */
+function sameLayerRender(a: RasterLayer, b: RasterLayer): boolean {
+  return a.visible === b.visible && a.opacity === b.opacity && a.strokes === b.strokes
+    && a.images === b.images && a.shapes === b.shapes && a.texts === b.texts;
+}
+
+function emptyList(list: unknown[] | undefined): boolean {
+  return !list || list.length === 0;
+}
+
+/**
+ * Opérations à dessiner PAR-DESSUS le raster de `prev` pour obtenir celui de
+ * `next`, ou null si un rendu complet est nécessaire. [] = rendu identique
+ * (ex. calque renommé) : le raster précédent reste valable tel quel.
+ *
+ * Cas sûr (le seul accepté) : des traits ajoutés à la FIN d'un calque visible,
+ * d'opacité 1, sans texte (dessiné après les traits), sans aucun calque
+ * visible au-dessus, sans sélection ni poignées, et aucun de ces traits n'est
+ * une gomme ou un remplissage. Le mélange « normal » étant associatif,
+ * dessiner ces traits sur le résultat équivaut au rendu complet.
+ */
+export function planIncremental(prev: RasterScene, next: RasterScene): RasterOp[] | null {
+  if (prev === next) return [];
+  if (prev.docW !== next.docW || prev.docH !== next.docH) return null;
+  if (!sameBackground(prev.background, next.background)) return null;
+  if (prev.grid !== next.grid || prev.dots !== next.dots) return null;
+  if (prev.transformBox || next.transformBox) return null;
+  if (prev.selection || next.selection) return null;
+  if (prev.layers.length !== next.layers.length) return null;
+  let changed = -1;
+  for (let i = 0; i < next.layers.length; i++) {
+    const a = prev.layers[i];
+    const b = next.layers[i];
+    if (a === b) continue;
+    if (a.id !== b.id) return null;
+    if (sameLayerRender(a, b)) continue;
+    if (!a.visible && !b.visible) continue; // invisible avant et après : rien à l'écran
+    if (changed >= 0) return null; // plusieurs calques modifiés
+    changed = i;
+  }
+  if (changed < 0) return [];
+  const a = prev.layers[changed];
+  const b = next.layers[changed];
+  if (!a.visible || !b.visible || a.opacity !== 1 || b.opacity !== 1) return null;
+  if (a.images !== b.images || a.shapes !== b.shapes || a.texts !== b.texts) return null;
+  if (!emptyList(b.texts)) return null;
+  for (let j = changed + 1; j < next.layers.length; j++) {
+    if (next.layers[j].visible || prev.layers[j].visible) return null;
+  }
+  const before = a.strokes;
+  const after = b.strokes;
+  if (after.length <= before.length) return null;
+  for (let k = 0; k < before.length; k++) if (before[k] !== after[k]) return null;
+  const added = after.slice(before.length);
+  if (added.some(s => s.tool === 'fill' || s.tool === 'eraser')) return null;
+  return planLayer({ id: b.id, visible: true, opacity: 1, strokes: added }, next.docW, next.docH);
+}
+
 /** Décode la partie base64 d'une URL data: ; null si ce n'en est pas une. */
 export function dataUrlBase64(src: string): string | null {
   if (!src.startsWith('data:')) return null;

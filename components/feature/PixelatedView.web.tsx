@@ -19,10 +19,12 @@ export interface PixelatedViewProps {
   translateX: SharedValue<number>;
   translateY: SharedValue<number>;
   scale: SharedValue<number>;
+  /** Rotation de la vue (degrés) autour du centre de la zone. */
+  rotation: SharedValue<number>;
 }
 
 export default function PixelatedView({
-  source, width, height, docW, docH, translateX, translateY, scale,
+  source, width, height, docW, docH, translateX, translateY, scale, rotation,
 }: PixelatedViewProps) {
   const { w: rasterW, h: rasterH } = docRasterSize(docW, docH);
   const pr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
@@ -42,7 +44,16 @@ export default function PixelatedView({
       ],
     };
   });
+  // Rotation de vue autour du centre de la zone (cette vue n'est plus dans
+  // l'Animated.View tournée du Svg) ; le navigateur garde le rendu pixelated.
+  const rotStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
   return (
+    <Animated.View
+      pointerEvents="none"
+      style={[{ position: 'absolute', left: 0, top: 0, width, height, overflow: 'visible' }, rotStyle]}
+    >
     <Animated.View
       pointerEvents="none"
       style={[{ position: 'absolute', left: 0, top: 0, width: rasterW, height: rasterH }, style]}
@@ -56,6 +67,7 @@ export default function PixelatedView({
           imageRendering: 'pixelated', pointerEvents: 'none', userSelect: 'none',
         }}
       />
+    </Animated.View>
     </Animated.View>
   );
 }

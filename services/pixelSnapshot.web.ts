@@ -51,3 +51,14 @@ export async function capturePixelSnapshot(req: PixelSnapshotRequest): Promise<P
   ctx.drawImage(img, 0, 0, outW, outH);
   return canvas.toDataURL('image/png');
 }
+
+/** Web : pas de surface gardée, chaque instantané est complet. */
+export function canRenderIncrementally(_scene: RasterScene): boolean {
+  return false;
+}
+
+/** Web : rien à libérer (URL data:). */
+export function releasePixelSnapshotCache(): void {}
+
+/** Web : rien à libérer (URL data:). */
+export function disposePixelSnapshot(_img: PixelSnapshot): void {}

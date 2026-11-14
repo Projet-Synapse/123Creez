@@ -31,17 +31,32 @@ export function scaleZoomStep(factor: number, sensitivity: unknown): number {
   return scalePinchRatio(factor, sensitivity);
 }
 
-/** Seuil de zoom à partir duquel la vue pixélisée remplace la vue lisse. */
-export const PIXEL_VIEW_MIN_ZOOM = 1.5;
+/**
+ * Seuil de zoom (en %, tel qu'affiché par le bouton de zoom) à partir duquel
+ * la vue pixélisée remplace la vue lisse : nette dès 100 % et au-delà. Sous
+ * 100 %, un pixel de document fait moins d'un pixel d'écran : le rendu lisse
+ * évite le scintillement de l'échantillonnage « plus proche voisin ».
+ */
+export const PIXEL_VIEW_MIN_ZOOM_PCT = 100;
 /** Au-delà de ce nombre de pixels de document, pas de vue pixélisée (mémoire). */
 export const PIXEL_VIEW_MAX_PIXELS = 16_000_000;
+
+/**
+ * Le zoom (facteur, 1 = 100 %) atteint-il le seuil de la vue pixélisée ?
+ * Arrondi au pour cent, exactement comme le libellé « NN % » de l'éditeur
+ * (Math.round(zoom * 100)) : si l'écran affiche 100 %, la vue est nette.
+ */
+export function pixelZoomEligible(zoom: number): boolean {
+  if (!Number.isFinite(zoom)) return false;
+  return Math.round(zoom * 100) >= PIXEL_VIEW_MIN_ZOOM_PCT;
+}
 
 /** La vue pixélisée doit-elle s'afficher ? (pure, sans état d'interaction) */
 export function pixelViewEligible(
   mode: unknown, zoom: number, docW: number, docH: number,
 ): boolean {
   if (mode !== 'pixelated') return false;
-  if (!(zoom >= PIXEL_VIEW_MIN_ZOOM)) return false;
+  if (!pixelZoomEligible(zoom)) return false;
   if (!(docW > 0 && docH > 0)) return false;
   return docW * docH <= PIXEL_VIEW_MAX_PIXELS;
 }

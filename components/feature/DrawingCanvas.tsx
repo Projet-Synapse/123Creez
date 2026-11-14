@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import React, { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo } from 'react';
 import {
   View, StyleSheet, PanResponder, GestureResponderEvent, Platform,
   Modal, TextInput, Pressable, Text,
@@ -19,8 +19,15 @@ import {
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
 import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke, shouldDeferStroke, STROKE_START_DELAY_MS } from '@/services/canvasInput';
-import { capturePixelSnapshot, type PixelSnapshot } from '@/services/pixelSnapshot';
+import {
+  capturePixelSnapshot, canRenderIncrementally, releasePixelSnapshotCache, disposePixelSnapshot,
+  type PixelSnapshot,
+} from '@/services/pixelSnapshot';
 import type { RasterScene } from '@/services/pixelRaster';
+import {
+  pixelRebuildDelay, pixelViewVisible, sceneRendersSame, shouldRetryPixelSnapshot, snapshotIsCurrent,
+  PIXEL_RETRY_MS, type VersionedSnapshot,
+} from '@/services/pixelSnapState';
 import PixelatedView from '@/components/feature/PixelatedView';
 import { MeasureGraphics, MeasurePanel } from '@/components/feature/MeasureOverlay';
 import {
@@ -263,16 +270,47 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       endStrokeTimer.current = null;
       if (!shouldCommitStroke(gestureInfo.current.maxTouches)) {
         cancelStrokeRef.current();
+        endPixelHold(false);
         return;
       }
       endStrokeRef.current();
+      endPixelHold(true);
     }, STROKE_START_DELAY_MS);
   }
   function flushScheduledEndStroke() {
     if (!endStrokeTimer.current) return;
     clearEndStrokeTimer();
-    if (shouldCommitStroke(gestureInfo.current.maxTouches)) endStrokeRef.current();
-    else cancelStrokeRef.current();
+    if (shouldCommitStroke(gestureInfo.current.maxTouches)) { endStrokeRef.current(); endPixelHold(true); }
+    else { cancelStrokeRef.current(); endPixelHold(false); }
+  }
+  // Vue pixélisée au lever du doigt : le trait n'entre dans les calques
+  // qu'après STROKE_START_DELAY_MS. D'ici là, l'instantané (sans ce trait)
+  // aurait réapparu un instant, puis la vue lisse le temps de le refaire.
+  // On garde donc le rendu direct jusqu'à ce que les calques contiennent le
+  // trait (ou qu'il soit jeté) ; la version de scène fait le reste.
+  const pixelHold = useRef<{ layers: unknown; armed: boolean; fallback: ReturnType<typeof setTimeout> | null } | null>(null);
+  function clearPixelHold() {
+    const h = pixelHold.current;
+    if (h?.fallback) clearTimeout(h.fallback);
+    pixelHold.current = null;
+  }
+  function startPixelHold() {
+    clearPixelHold();
+    pixelHold.current = { layers: layersRef.current, armed: false, fallback: null };
+  }
+  function endPixelHold(afterCommit: boolean) {
+    const h = pixelHold.current;
+    if (!h) return;
+    if (afterCommit && layersRef.current === h.layers) {
+      // Trait commité mais pas encore rendu : on attend les nouveaux calques
+      // (effet sur `layers` plus bas), avec un filet si rien ne change.
+      h.armed = true;
+      if (!h.fallback) h.fallback = setTimeout(() => endPixelHold(false), PIXEL_HOLD_MAX_MS);
+      return;
+    }
+    clearPixelHold();
+    // Un nouveau geste a déjà commencé : c'est lui qui gère l'état.
+    if (!isDrawing.current) setPixelGestureRef.current(false);
   }
   const moveLastX = useRef(0);
   const moveLastY = useRef(0);
@@ -283,12 +321,13 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // Vue pixélisée : on ne garde en état React que le franchissement du seuil
   // de zoom (booléen) et le fait qu'un geste est en cours — jamais le zoom
   // continu, pour ne pas re-rendre le canevas à chaque mouvement de pinch.
+  // Zoom arrondi au pour cent, comme le libellé « NN % » : la vue est nette
+  // dès que l'écran affiche 100 % (cf. pixelZoomEligible). Mis à jour en fin
+  // de geste seulement : jamais de bascule net / lisse pendant un pinch.
   const [zoomForPixel, setZoomForPixel] = useState(1);
   const notePixelZoom = useCallback((z: number) => {
-    // Arrondi à 0.5 près : quelques rendus par geste au plus, et seulement
-    // si la vue pixélisée est choisie.
     if (settingsRef.current.zoomRendering !== 'pixelated') return;
-    setZoomForPixel(Math.round(z * 2) / 2);
+    setZoomForPixel(Math.round(z * 100) / 100);
   }, []);
   const notePixelZoomRef = useRef(notePixelZoom);
   notePixelZoomRef.current = notePixelZoom;
@@ -296,9 +335,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // n'est appelé qu'à la fin d'un geste, donc on relit le zoom courant ici.
   const zoomRenderingMode = settings.zoomRendering;
   useEffect(() => {
-    if (zoomRenderingMode === 'pixelated') setZoomForPixel(Math.round(lastScale.current * 2) / 2);
+    if (zoomRenderingMode === 'pixelated') setZoomForPixel(Math.round(lastScale.current * 100) / 100);
   }, [zoomRenderingMode]);
   const [pixelGesture, setPixelGesture] = useState(false);
+  const pixelGestureOnRef = useRef(pixelGesture);
+  pixelGestureOnRef.current = pixelGesture;
 
   // ─── Outil Mesure (surcouche d'affichage, état LOCAL) ─────────────
   // Jamais dans les calques / l'historique / la sauvegarde / l'export ; seule
@@ -633,6 +674,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     isPinching.current = true;
     // Pinch : rien ne change dans le dessin → la vue pixélisée reste.
     clearPixelGestureTimer();
+    clearPixelHold();
     setPixelGestureRef.current(false);
     discardInProgressStroke();
     measureEndRef.current(true);
@@ -1026,6 +1068,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
       onPanResponderRelease: () => {
         clearPixelGestureTimer();
+        const pixelWasLive = pixelGestureOnRef.current;
         setPixelGestureRef.current(false);
         if (rotActive.current) { rotActive.current = false; applyRotationRef.current(lastRotation.current); }
         clearLongPressRef.current();
@@ -1084,11 +1127,14 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           // Commit différé : un release Android « fantôme » (2e doigt qui
           // arrive) peut encore annuler ce fragment via startPinch.
           scheduleEndStroke();
+          // Rendu direct maintenu jusqu'au commit (pas d'instantané périmé).
+          if (pixelWasLive) { startPixelHold(); setPixelGestureRef.current(true); }
         }
       },
 
       onPanResponderTerminate: () => {
         clearPixelGestureTimer();
+        clearPixelHold();
         setPixelGestureRef.current(false);
         if (rotActive.current) { rotActive.current = false; applyRotationRef.current(lastRotation.current); }
         clearLongPressRef.current();
@@ -1111,6 +1157,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   ).current;
 
   const rotationStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
+  // Même rotation pour la surcouche Mesure (sortie de la vue tournée avec la
+  // vue pixélisée, pour rester AU-DESSUS d'elle).
+  const measureRotationStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotation.value}deg` }],
   }));
 
@@ -1184,63 +1235,133 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   // dépasse le seuil. Pendant un geste (tracé, pinch…) on revient au Svg en
   // direct.
   const svgWrapRef = useRef<View>(null);
-  const [pixelSnap, setPixelSnap] = useState<PixelSnapshot | null>(null);
+  const [pixelSnap, setPixelSnap] = useState<VersionedSnapshot<PixelSnapshot> | null>(null);
   const docW = contentSize?.width ?? width;
   const docH = contentSize?.height ?? height;
   const pixelMode = settings.zoomRendering ?? 'smooth';
   const pixelEligible = pixelViewEligible(pixelMode, zoomForPixel, docW, docH) && width > 0 && height > 0;
   // Description de la toile pour l'instantané natif (redessinée par Skia à
   // docW × docH px, cf. services/pixelSnapshot.ts) : mêmes éléments, dans
-  // le même ordre que le Svg ci-dessous. Lue au moment de la capture.
-  const pixelSceneRef = useRef<RasterScene | null>(null);
-  {
-    const transformImg = activeTool === 'transform' && transformSel === 0
-      ? layers.find(l => l.id === activeLayerId)?.images?.[0]
-      : undefined;
-    const fitK = Math.max(0.0001, Math.min(width / docW, height / docH));
-    const lineK = Math.max(0.0001, Math.min(width / docW, 1));
-    pixelSceneRef.current = {
-      docW, docH,
-      background: transparentBg === true
-        ? (hideCheckerForCapture ? { kind: 'none' } : { kind: 'checker' })
-        : (isTransparent ? { kind: 'checker' } : { kind: 'color', color: bgColor }),
-      grid: showGrid ? overlayColor : null,
-      dots: showDots ? overlayColor : null,
-      layers,
-      activeLayerId,
-      selection: selection ? { points: selection.points, offset: selection.offset } : null,
-      transformBox: transformImg
-        ? { x: transformImg.x, y: transformImg.y, w: transformImg.width, h: transformImg.height, color: activeColor, strokeWidth: 2 / lineK, handleR: 14 / fitK }
-        : null,
+  // le même ordre que le Svg ci-dessous. L'objet n'est recréé que si le
+  // RENDU peut changer : c'est la « version » de l'instantané. La couleur
+  // et l'outil actifs n'y entrent que pour les poignées de Transformer.
+  const transformImg = activeTool === 'transform' && transformSel === 0
+    ? layers.find(l => l.id === activeLayerId)?.images?.[0]
+    : undefined;
+  const fitK = Math.max(0.0001, Math.min(width / docW, height / docH));
+  const lineK = Math.max(0.0001, Math.min(width / docW, 1));
+  const sceneBg: RasterScene['background'] = transparentBg === true
+    ? (hideCheckerForCapture ? { kind: 'none' } : { kind: 'checker' })
+    : (isTransparent ? { kind: 'checker' } : { kind: 'color', color: bgColor });
+  const sceneBgKey = sceneBg.kind === 'color' ? `color:${sceneBg.color}` : sceneBg.kind;
+  const sceneGrid = showGrid ? overlayColor : null;
+  const sceneDots = showDots ? overlayColor : null;
+  const selFloating = !!selection && (selection.offset.x !== 0 || selection.offset.y !== 0);
+  // Calque actif : ne compte que pour une sélection déplacée. Couleur et
+  // taille de zone : seulement pour les poignées de Transformer.
+  const sceneActiveLayer = selFloating ? activeLayerId : null;
+  const sceneHandleColor = transformImg ? activeColor : null;
+  const sceneFitK = transformImg ? fitK : 0;
+  const sceneLineK = transformImg ? lineK : 0;
+  const pixelScene = useMemo<RasterScene>(() => ({
+    docW, docH,
+    background: sceneBg,
+    grid: sceneGrid,
+    dots: sceneDots,
+    layers,
+    activeLayerId,
+    selection: selection ? { points: selection.points, offset: selection.offset } : null,
+    transformBox: transformImg
+      ? { x: transformImg.x, y: transformImg.y, w: transformImg.width, h: transformImg.height, color: activeColor, strokeWidth: 2 / lineK, handleR: 14 / fitK }
+      : null,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [
+    docW, docH, sceneBgKey, sceneGrid, sceneDots, layers, selection,
+    sceneActiveLayer, transformImg, sceneHandleColor, sceneFitK, sceneLineK,
+  ]);
+  // Dernière image affichée : jamais libérée tant qu'elle sert.
+  const shownImageRef = useRef<PixelSnapshot | null>(null);
+  shownImageRef.current = pixelSnap?.image ?? null;
+  // Image remplacée : libérée un peu plus tard (le rendu Skia de l'écran
+  // peut encore la référencer pendant une image).
+  useEffect(() => {
+    const img = pixelSnap?.image;
+    return () => {
+      if (!img) return;
+      setTimeout(() => { if (shownImageRef.current !== img) disposePixelSnapshot(img); }, PIXEL_DISPOSE_DELAY_MS);
     };
-  }
-  // Le contenu change → l'instantané est périmé (on n'affiche jamais un
-  // ancien état du dessin, quitte à montrer la vue lisse un instant).
+  }, [pixelSnap]);
+  // Écart entre deux changements de scène : debounce des changements en
+  // rafale (curseur d'opacité de calque, roue des couleurs…).
+  const sceneChangedAt = useRef<number | null>(null);
+  const sceneGap = useRef<number | null>(null);
   useEffect(() => {
-    setPixelSnap(null);
-  }, [layers, selection, width, height, docW, docH, transparentBg, hideCheckerForCapture, settings.canvasBg, settings.showGrid, pixelMode, activeTool, transformSel, activeLayerId, activeColor]);
+    const now = Date.now();
+    sceneGap.current = sceneChangedAt.current === null ? null : now - sceneChangedAt.current;
+    sceneChangedAt.current = now;
+  }, [pixelScene]);
+  // Échecs de l'instantané : quelques nouveaux essais, puis vue lisse.
+  const [pixelRetryTick, setPixelRetryTick] = useState(0);
+  const pixelFailures = useRef<{ scene: RasterScene | null; count: number }>({ scene: null, count: 0 });
+  const pixelRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!pixelEligible || pixelGesture || pixelSuppressed || pixelSnap) return;
-    const scene = pixelSceneRef.current;
-    if (!scene) return;
+    if (!pixelEligible || pixelGesture || pixelSuppressed) return;
+    if (snapshotIsCurrent(pixelSnap, pixelScene)) return;
+    const scene = pixelScene;
+    // Même rendu (calque renommé, calque actif changé…) : l'image est reprise.
+    if (pixelSnap && sceneRendersSame(pixelSnap.scene, scene)) {
+      setPixelSnap({ image: pixelSnap.image, scene });
+      return;
+    }
     let cancelled = false;
+    const onFail = () => {
+      const f = pixelFailures.current;
+      if (f.scene !== scene) { f.scene = scene; f.count = 0; }
+      f.count += 1;
+      if (!shouldRetryPixelSnapshot(f.count)) return;
+      if (pixelRetryTimer.current) clearTimeout(pixelRetryTimer.current);
+      pixelRetryTimer.current = setTimeout(() => {
+        pixelRetryTimer.current = null;
+        setPixelRetryTick(n => n + 1);
+      }, PIXEL_RETRY_MS);
+    };
+    const delay = pixelRebuildDelay(sceneGap.current, canRenderIncrementally(scene));
     const t = setTimeout(async () => {
       try {
-        // Natif : toile redessinée par Skia à docW × docH px, photos en
-        // plus proche voisin. Web : le Svg à docW × docH, sans lissage.
-        const snap = await capturePixelSnapshot({ node: svgWrapRef.current, scene });
-        if (!cancelled && snap) setPixelSnap(snap);
+        // Natif : un trait ajouté est dessiné sur le raster gardé, sinon la
+        // toile est redessinée par Skia à docW × docH px (photos en plus
+        // proche voisin). Web : le Svg à docW × docH, sans lissage.
+        const image = await capturePixelSnapshot({ node: svgWrapRef.current, scene });
+        if (cancelled) { if (image) disposePixelSnapshot(image); return; }
+        if (!image) { onFail(); return; }
+        pixelFailures.current = { scene: null, count: 0 };
+        setPixelSnap({ image, scene });
       } catch {
-        // Échec de capture : on reste simplement en vue lisse.
+        // Échec : vue lisse, et un nouvel essai un peu plus tard.
+        if (!cancelled) onFail();
       }
-    }, 16); // une image : la vue lisse ne reste visible que le temps de la capture
+    }, delay);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [pixelEligible, pixelGesture, pixelSuppressed, pixelSnap, width, height, docW, docH]);
+  }, [pixelEligible, pixelGesture, pixelSuppressed, pixelSnap, pixelScene, pixelRetryTick]);
   // Mode remis sur « lisse » ou zoom repassé sous le seuil : la mémoire de
-  // l'instantané est libérée.
+  // l'instantané (image et surface gardée) est libérée.
   useEffect(() => {
-    if (!pixelEligible) setPixelSnap(null);
+    if (pixelEligible) return;
+    setPixelSnap(null);
+    releasePixelSnapshotCache();
   }, [pixelEligible]);
+  useEffect(() => () => {
+    if (pixelRetryTimer.current) clearTimeout(pixelRetryTimer.current);
+    clearPixelHold();
+    releasePixelSnapshotCache();
+  }, []);
+  // Lever du doigt : les calques contiennent maintenant le trait → la vue
+  // pixélisée peut revenir (dès que son instantané est à jour).
+  useEffect(() => {
+    const h = pixelHold.current;
+    if (h?.armed && layers !== h.layers) endPixelHold(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers]);
   // Shift (desktop) = magnétisme 15° temporaire.
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -1280,7 +1401,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     else setMeasure(setAngleFromInput(m, n));
   }, [setMeasure]);
 
-  const showPixel = pixelEligible && !pixelGesture && !pixelSuppressed && !!pixelSnap;
+  const showPixel = pixelViewVisible({
+    eligible: pixelEligible, gesture: pixelGesture, suppressed: pixelSuppressed, snap: pixelSnap, scene: pixelScene,
+  });
   pixelVisibleRef.current = showPixel;
 
   if (width <= 0 || height <= 0) return null;
@@ -1476,21 +1599,25 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         </Svg>
         </View>
       </Animated.View>
-      {/* Vue pixélisée dans l'ESPACE ÉCRAN : le zoom est appliqué en Nearest
-          par PixelatedView (jamais par le scale natif, qui lisse). Sous la
-          surcouche Mesure, qui reste au-dessus. */}
+      </Animated.View>
+      {/* Vue pixélisée dans l'ESPACE ÉCRAN et HORS de la vue tournée : zoom,
+          pan et rotation de vue sont appliqués par PixelatedView, dans Skia,
+          en plus proche voisin (jamais par le compositeur, qui lisse). Sous
+          la surcouche Mesure, qui reste au-dessus. */}
       {showPixel && pixelSnap && (
         <PixelatedView
-          source={pixelSnap} width={width} height={height} docW={docW} docH={docH}
-          translateX={translateX} translateY={translateY} scale={scale}
+          source={pixelSnap.image} width={width} height={height} docW={docW} docH={docH}
+          translateX={translateX} translateY={translateY} scale={scale} rotation={rotation}
         />
       )}
       {/* Outil Mesure : hors de la vue zoomée (taille constante à l'écran),
-          hors de l'instantané pixélisé, masqué pendant l'export. */}
+          hors de l'instantané pixélisé, masqué pendant l'export. Tourné avec
+          la vue, comme avant. */}
       {activeTool === 'measure' && !pixelSuppressed && measure && (
-        <MeasureGraphics measure={measure} view={viewParams(lastScale.current, lastTranslateX.current, lastTranslateY.current, width, height, docW, docH)} width={width} height={height} />
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, measureRotationStyle]}>
+          <MeasureGraphics measure={measure} view={viewParams(lastScale.current, lastTranslateX.current, lastTranslateY.current, width, height, docW, docH)} width={width} height={height} />
+        </Animated.View>
       )}
-      </Animated.View>
       {/* Indicateur d'angle de vue : visible seulement si la vue est tournée ;
           un appui la remet droite (0°). */}
       {rotationDeg !== 0 && !pixelSuppressed && (
@@ -1552,6 +1679,11 @@ const rotStyles = StyleSheet.create({
 const PIXEL_KEEP_TOOLS = new Set<string>(['measure', 'eyedropper']);
 // Au-delà du délai d'attente d'un trait (80 ms) : un pinch est déjà détecté.
 const PIXEL_LIVE_DELAY_MS = 90;
+// Filet : vue pixélisée rendue au plus tard après ce délai si le trait
+// commité n'a pas (encore) changé les calques.
+const PIXEL_HOLD_MAX_MS = 300;
+// Délai avant de libérer une image d'instantané remplacée.
+const PIXEL_DISPOSE_DELAY_MS = 500;
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_TOLERANCE_PX = 8;
 

@@ -12,9 +12,9 @@
 // aucune donnée du dessin n'est modifiée.
 import {
   Skia, FilterMode, MipmapMode, PaintStyle, StrokeCap, StrokeJoin, BlendMode, ClipOp, matchFont,
-  type SkCanvas, type SkFont, type SkImage, type SkPaint, type SkPath,
+  type SkCanvas, type SkFont, type SkImage, type SkPaint, type SkPath, type SkSurface,
 } from '@shopify/react-native-skia';
-import { planDocRaster, dataUrlBase64, type RasterGeom, type RasterOp, type RasterPaint, type RasterScene } from './pixelRaster';
+import { planDocRaster, planIncremental, dataUrlBase64, type RasterGeom, type RasterOp, type RasterPaint, type RasterScene } from './pixelRaster';
 import { docRasterSize, imageMeetRect } from './pixelGrid';
 
 /** Natif : image Skia de docW × docH px, prête à être affichée. */
@@ -174,19 +174,82 @@ async function runOps(canvas: SkCanvas, ops: RasterOp[]) {
   }
 }
 
-export async function capturePixelSnapshot(req: PixelSnapshotRequest): Promise<PixelSnapshot | null> {
-  const { scene } = req;
+// Surface gardée d'un instantané à l'autre : elle contient le raster de
+// `scene`. Un trait ajouté (cas sûr, cf. planIncremental) y est dessiné
+// par-dessus au lieu de tout refaire. null = rien de valable en mémoire.
+interface Retained { surface: SkSurface; w: number; h: number; scene: RasterScene }
+let retained: Retained | null = null;
+// Un seul rendu à la fois sur la surface gardée (le décodage des photos est
+// asynchrone : deux rendus pourraient sinon s'entremêler).
+let queue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(job: () => Promise<T>): Promise<T> {
+  const run = queue.then(job);
+  queue = run.catch(() => null);
+  return run;
+}
+
+function dropRetained() {
+  const r = retained;
+  retained = null;
+  if (r) { try { r.surface.dispose(); } catch { /* déjà libérée */ } }
+}
+
+/** Le prochain instantané de `scene` sera-t-il un simple ajout de trait ? */
+export function canRenderIncrementally(scene: RasterScene): boolean {
+  const r = retained;
+  if (!r) return false;
   const { w, h } = docRasterSize(scene.docW, scene.docH);
-  const surface = Skia.Surface.MakeOffscreen(w, h) ?? Skia.Surface.Make(w, h);
+  return r.w === w && r.h === h && planIncremental(r.scene, scene) !== null;
+}
+
+async function renderSnapshot(scene: RasterScene): Promise<PixelSnapshot | null> {
+  const { w, h } = docRasterSize(scene.docW, scene.docH);
+  const prev = retained;
+  const sameSize = !!prev && prev.w === w && prev.h === h;
+  const inc = sameSize && prev ? planIncremental(prev.scene, scene) : null;
+  let surface: SkSurface | null;
+  if (sameSize && prev) {
+    surface = prev.surface;
+  } else {
+    dropRetained();
+    surface = Skia.Surface.MakeOffscreen(w, h) ?? Skia.Surface.Make(w, h);
+  }
   if (!surface) return null;
-  const canvas = surface.getCanvas();
-  canvas.clear(Skia.Color('transparent'));
-  canvas.save();
-  // Document à dimensions non entières : on le cale sur le raster arrondi.
-  if (w !== scene.docW || h !== scene.docH) canvas.scale(w / scene.docW, h / scene.docH);
-  await runOps(canvas, planDocRaster(scene));
-  canvas.restore();
-  surface.flush();
-  // Copie hors texture : utilisable par le Canvas Skia de l'écran.
-  return surface.makeImageSnapshot().makeNonTextureImage();
+  // Pendant le dessin, la surface n'est plus « valable » : un échec en cours
+  // de route forcera un rendu complet la prochaine fois.
+  retained = null;
+  try {
+    const canvas = surface.getCanvas();
+    canvas.save();
+    if (!inc) canvas.clear(Skia.Color('transparent'));
+    // Document à dimensions non entières : on le cale sur le raster arrondi.
+    if (w !== scene.docW || h !== scene.docH) canvas.scale(w / scene.docW, h / scene.docH);
+    await runOps(canvas, inc ?? planDocRaster(scene));
+    canvas.restore();
+    surface.flush();
+    const tex = surface.makeImageSnapshot();
+    // Copie hors texture : utilisable par le Canvas Skia de l'écran.
+    const img = tex.makeNonTextureImage();
+    if (img !== tex) { try { tex.dispose(); } catch { /* rien */ } }
+    retained = { surface, w, h, scene };
+    return img;
+  } catch (e) {
+    try { surface.dispose(); } catch { /* rien */ }
+    throw e;
+  }
+}
+
+export function capturePixelSnapshot(req: PixelSnapshotRequest): Promise<PixelSnapshot | null> {
+  return enqueue(() => renderSnapshot(req.scene));
+}
+
+/** Libère la surface gardée (vue pixélisée quittée, éditeur fermé). */
+export function releasePixelSnapshotCache(): void {
+  void enqueue(async () => { dropRetained(); });
+}
+
+/** Libère une image d'instantané qui n'est plus affichée. */
+export function disposePixelSnapshot(img: PixelSnapshot): void {
+  try { img.dispose(); } catch { /* déjà libérée */ }
 }

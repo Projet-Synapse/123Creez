@@ -119,3 +119,92 @@ test('URL data: → base64', () => {
   assert.equal(dataUrlBase64('file:///x.png'), null);
   assert.equal(dataUrlBase64('data:image/svg+xml,<svg/>'), null);
 });
+
+// ─── Reconstruction incrémentale ──────────────────────────────────────
+import { planIncremental } from '../pixelRaster';
+
+const opaque = (s: ReturnType<typeof stroke>) => ({ ...s, opacity: 1 });
+
+test('incrémental : trait ajouté au calque du dessus → seulement ce trait', () => {
+  const s1 = opaque(stroke('s1', 'brush'));
+  const s2 = opaque(stroke('s2', 'brush'));
+  const bottom: RasterLayer = { id: 'b', visible: true, opacity: 0.5, strokes: [s1] };
+  const top: RasterLayer = { id: 'a', visible: true, opacity: 1, strokes: [s1] };
+  const prev = scene({ layers: [bottom, top] });
+  const next = scene({ layers: [bottom, { ...top, strokes: [s1, s2] }] });
+  const ops = planIncremental(prev, next);
+  if (!ops) throw new Error('incrémental attendu');
+  const draws = ops.filter(o => o.op === 'draw');
+  assert.equal(draws.length, 1);
+  assert.deepEqual(draws[0].op === 'draw' && draws[0].geom, { kind: 'path', d: buildSvgPath(s2) });
+  // Mêmes groupes que le rendu complet (calque, calque isolé des traits).
+  assert.deepEqual(kinds(ops), ['layer', 'layer', 'draw:path', 'restore', 'restore']);
+});
+
+test('incrémental : un trait après une gomme reste dessiné par-dessus', () => {
+  const s1 = opaque(stroke('s1', 'brush'));
+  const er = stroke('e', 'eraser');
+  const s2 = opaque(stroke('s2', 'pencil'));
+  const l: RasterLayer = { id: 'a', visible: true, opacity: 1, strokes: [s1, er] };
+  const ops = planIncremental(scene({ layers: [l] }), scene({ layers: [{ ...l, strokes: [s1, er, s2] }] }));
+  if (!ops) throw new Error('incrémental attendu');
+  assert.equal(ops.filter(o => o.op === 'draw' && o.paint.erase).length, 0);
+});
+
+test('incrémental refusé (rendu complet) dans tous les cas non sûrs', () => {
+  const s1 = opaque(stroke('s1', 'brush'));
+  const s2 = opaque(stroke('s2', 'brush'));
+  const l: RasterLayer = { id: 'a', visible: true, opacity: 1, strokes: [s1] };
+  const add = (over: Partial<RasterLayer> = {}): RasterLayer => ({ ...l, strokes: [s1, s2], ...over });
+  const prev = scene({ layers: [l] });
+  // Gomme ou remplissage ajouté.
+  assert.equal(planIncremental(prev, scene({ layers: [add({ strokes: [s1, stroke('e', 'eraser')] })] })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add({ strokes: [s1, stroke('f', 'fill')] })] })), null);
+  // Annulation (trait retiré) ou trait modifié.
+  assert.equal(planIncremental(scene({ layers: [add()] }), prev), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add({ strokes: [{ ...s1 }, s2] })] })), null);
+  // Calque à opacité < 1 (mélange non associatif avec le groupe).
+  const half = { ...l, opacity: 0.5 };
+  assert.equal(planIncremental(scene({ layers: [half] }), scene({ layers: [{ ...half, strokes: [s1, s2] }] })), null);
+  // Opacité changée, calque masqué.
+  assert.equal(planIncremental(prev, scene({ layers: [add({ opacity: 0.9 })] })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add({ visible: false })] })), null);
+  // Textes du calque (dessinés APRÈS les traits).
+  const texts = [{ x: 1, y: 1, value: 'a', size: 10, color: '#000', opacity: 1 }];
+  const lt = { ...l, texts };
+  assert.equal(planIncremental(scene({ layers: [lt] }), scene({ layers: [{ ...lt, strokes: [s1, s2] }] })), null);
+  // Calque visible au-dessus.
+  const above: RasterLayer = { id: 'z', visible: true, opacity: 1, strokes: [] };
+  assert.equal(planIncremental(scene({ layers: [l, above] }), scene({ layers: [add(), above] })), null);
+  // Deux calques modifiés.
+  const l2: RasterLayer = { id: 'c', visible: true, opacity: 1, strokes: [] };
+  assert.equal(planIncremental(scene({ layers: [l2, l] }), scene({ layers: [{ ...l2, strokes: [s2] }, add()] })), null);
+  // Sélection, poignées, fond, grille, taille, nombre de calques.
+  const sel = { points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], offset: { x: 0, y: 0 } };
+  assert.equal(planIncremental(prev, scene({ layers: [add()], selection: sel })), null);
+  const tb = { x: 0, y: 0, w: 10, h: 10, color: '#000', strokeWidth: 1, handleR: 2 };
+  assert.equal(planIncremental(prev, scene({ layers: [add()], transformBox: tb })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add()], background: { kind: 'checker' } })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add()], background: { kind: 'color', color: '#000' } })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add()], grid: '#000' })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add()], docW: 101 })), null);
+  assert.equal(planIncremental(prev, scene({ layers: [add(), l2] })), null);
+  // Autre calque à la même place (ordre changé).
+  assert.equal(planIncremental(prev, scene({ layers: [{ ...add(), id: 'x' }] })), null);
+});
+
+test('incrémental : calque masqué au-dessus, ou modifié mais masqué → accepté', () => {
+  const s1 = opaque(stroke('s1', 'brush'));
+  const s2 = opaque(stroke('s2', 'brush'));
+  const l: RasterLayer = { id: 'a', visible: true, opacity: 1, strokes: [s1] };
+  const hidden: RasterLayer = { id: 'h', visible: false, opacity: 1, strokes: [] };
+  const ops = planIncremental(
+    scene({ layers: [l, hidden] }),
+    scene({ layers: [{ ...l, strokes: [s1, s2] }, { ...hidden, strokes: [s2] }] }),
+  );
+  assert.ok(ops && ops.length > 0);
+  // Rien de visible n'a changé : [] (raster précédent repris tel quel).
+  assert.deepEqual(planIncremental(scene({ layers: [l] }), scene({ layers: [{ ...l, name: 'x' } as RasterLayer] })), []);
+  const same = scene({ layers: [l] });
+  assert.deepEqual(planIncremental(same, same), []);
+});

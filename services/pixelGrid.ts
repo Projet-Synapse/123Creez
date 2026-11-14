@@ -84,3 +84,62 @@ export function imageMeetRect(
   const ih = natH * k;
   return { x: x + (w - iw) / 2, y: y + (h - ih) / 2, w: iw, h: ih };
 }
+
+/** Opérations de transformation Skia (la première est la plus extérieure). */
+export type PixelViewTransformOp =
+  | { translateX: number }
+  | { translateY: number }
+  | { rotate: number }
+  | { scaleX: number }
+  | { scaleY: number };
+
+/**
+ * Transformation complète de la vue pixélisée, rotation de VUE comprise.
+ * La rotation est faite DANS Skia (autour du centre de la zone, comme
+ * l'Animated.View tournée du Svg), pour que l'échantillonnage reste en plus
+ * proche voisin : une vue Skia tournée par le compositeur Android serait
+ * rééchantillonnée en bilinéaire, donc floue. À 0°, aucune rotation n'est
+ * ajoutée : résultat identique à pixelAlignedTransform seul.
+ */
+export function pixelViewTransformOps(
+  t: PixelViewTransform, rotationDeg: number, zoneW: number, zoneH: number,
+): PixelViewTransformOp[] {
+  'worklet';
+  const ops: PixelViewTransformOp[] = [];
+  const deg = Number.isFinite(rotationDeg) ? rotationDeg % 360 : 0;
+  if (deg !== 0) {
+    const cx = zoneW / 2;
+    const cy = zoneH / 2;
+    ops.push(
+      { translateX: cx }, { translateY: cy },
+      { rotate: (deg * Math.PI) / 180 },
+      { translateX: -cx }, { translateY: -cy },
+    );
+  }
+  ops.push({ translateX: t.x }, { translateY: t.y }, { scaleX: t.sx }, { scaleY: t.sy });
+  return ops;
+}
+
+/**
+ * Applique une liste d'opérations à un point (même convention que Skia /
+ * CSS : la première opération est la plus extérieure). Sert aux tests.
+ */
+export function applyTransformOps(ops: PixelViewTransformOp[], x: number, y: number): { x: number; y: number } {
+  let px = x;
+  let py = y;
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const o = ops[i] as Record<string, number>;
+    if ('translateX' in o) px += o.translateX;
+    else if ('translateY' in o) py += o.translateY;
+    else if ('scaleX' in o) px *= o.scaleX;
+    else if ('scaleY' in o) py *= o.scaleY;
+    else if ('rotate' in o) {
+      const c = Math.cos(o.rotate);
+      const s = Math.sin(o.rotate);
+      const nx = px * c - py * s;
+      py = px * s + py * c;
+      px = nx;
+    }
+  }
+  return { x: px, y: py };
+}

@@ -83,3 +83,42 @@ test('photo dans sa boîte : « meet » comme react-native-svg', () => {
   // Taille inconnue : la boîte telle quelle.
   assert.deepEqual(imageMeetRect(1, 2, 3, 4, 0, 0), { x: 1, y: 2, w: 3, h: 4 });
 });
+
+// ─── Rotation de vue dans Skia ────────────────────────────────────────
+import { pixelViewTransformOps, applyTransformOps } from '../pixelGrid';
+import { rotateVec, unrotatePoint } from '../gestureMath';
+
+test('rotation 0° : transformation identique à pixelAlignedTransform seul', () => {
+  const t = pixelAlignedTransform(ZONE_W, ZONE_H, DOC_W, DOC_H, DOC_W, DOC_H, 13.37, -25.1, 3.2, PR);
+  const ops = pixelViewTransformOps(t, 0, ZONE_W, ZONE_H);
+  assert.deepEqual(ops, [{ translateX: t.x }, { translateY: t.y }, { scaleX: t.sx }, { scaleY: t.sy }]);
+  const p = applyTransformOps(ops, 100, 200);
+  assert.ok(Math.abs(p.x - (t.x + 100 * t.sx)) < 1e-9);
+  assert.ok(Math.abs(p.y - (t.y + 200 * t.sy)) < 1e-9);
+});
+
+test('rotation : même placement que la vue tournée autour du centre de la zone', () => {
+  const t = pixelAlignedTransform(ZONE_W, ZONE_H, DOC_W, DOC_H, DOC_W, DOC_H, -40, 12, 2.5, PR);
+  const cx = ZONE_W / 2;
+  const cy = ZONE_H / 2;
+  for (const deg of [90, 180, -90, 37, -12.5]) {
+    const ops = pixelViewTransformOps(t, deg, ZONE_W, ZONE_H);
+    for (const [u, v] of [[0, 0], [DOC_W, 0], [DOC_W, DOC_H], [512, 777]]) {
+      // Sans rotation, puis tourné autour du centre comme l'Animated.View.
+      const flat = { x: t.x + u * t.sx, y: t.y + v * t.sy };
+      const r = rotateVec(flat.x - cx, flat.y - cy, deg);
+      const got = applyTransformOps(ops, u, v);
+      assert.ok(Math.abs(got.x - (cx + r.x)) < 1e-6, `${deg}° x`);
+      assert.ok(Math.abs(got.y - (cy + r.y)) < 1e-6, `${deg}° y`);
+      // Et les gestes (unrotatePoint) retombent sur le point non tourné.
+      const back = unrotatePoint(got.x, got.y, ZONE_W, ZONE_H, deg);
+      assert.ok(Math.abs(back.x - flat.x) < 1e-6 && Math.abs(back.y - flat.y) < 1e-6);
+    }
+  }
+});
+
+test('rotation : 360° et valeurs invalides = pas de rotation', () => {
+  const t = { x: 1, y: 2, sx: 3, sy: 4 };
+  assert.equal(pixelViewTransformOps(t, 360, 100, 100).length, 4);
+  assert.equal(pixelViewTransformOps(t, Number.NaN, 100, 100).length, 4);
+});

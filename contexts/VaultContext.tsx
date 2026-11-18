@@ -143,6 +143,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const renameCanvasFn = useCallback(async (id: string, name: string) => {
     await renameCanvas(id, name);
     setCanvases(prev => prev.map(c => c.id === id ? { ...c, name, updatedAt: Date.now() } : c));
+    schedulePush();
   }, []);
 
   const setCanvasDrawingTimeFn = useCallback(async (id: string, seconds: number) => {
@@ -214,6 +215,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     f.updatedAt = Date.now();
     await saveFolder(f);
     setFolders(prev => prev.map(x => x.id === id ? { ...x, name, updatedAt: f.updatedAt } : x));
+    schedulePush();
   }, []);
 
   const removeFolder = useCallback(async (id: string) => {

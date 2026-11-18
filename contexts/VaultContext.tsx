@@ -40,7 +40,7 @@ interface VaultContextType {
   /** Cumule le temps de dessin (secondes) de la toile (galerie). */
   addCanvasDrawingTime: (id: string, seconds: number) => Promise<void>;
 
-  createFolder: (name: string, color?: string) => Promise<Folder>;
+  createFolder: (name: string, color?: string, parentId?: string | null) => Promise<Folder>;
   renameFolder: (id: string, name: string) => Promise<void>;
   removeFolder: (id: string) => Promise<void>;
 
@@ -193,11 +193,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     return newData.meta.id;
   }, [reload]);
 
-  const createFolder = useCallback(async (name: string, color = '#4ecdc4'): Promise<Folder> => {
+  const createFolder = useCallback(async (name: string, color = '#4ecdc4', parentId: string | null = null): Promise<Folder> => {
     const folder: Folder = {
       id: generateId('folder'),
       name,
-      parentId: null,
+      parentId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       color,

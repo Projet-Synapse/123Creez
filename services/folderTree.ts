@@ -68,3 +68,9 @@ export function reorderAround(ids: readonly string[], id: string, targetId: stri
 export function remoteFolderWins(localUpdatedAt: number | undefined, remoteMs: number): boolean {
   return remoteMs > (localUpdatedAt ?? 0);
 }
+
+/** Dossier parent d'un nouveau dossier : le dossier ouvert, ou la racine. */
+export function parentIdForNewFolder(activeFolderId: string | 'root' | null | undefined): string | null {
+  if (!activeFolderId || activeFolderId === 'root') return null;
+  return activeFolderId;
+}

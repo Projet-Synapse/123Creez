@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestorIds, folderPath, canNestFolder, folderDropZone, reorderAround, remoteFolderWins } from '../folderTree';
+import { ancestorIds, folderPath, canNestFolder, folderDropZone, reorderAround, remoteFolderWins, parentIdForNewFolder } from '../folderTree';
 
 const F = [
   { id: 'a', parentId: null },
@@ -43,4 +43,13 @@ test('remoteFolderWins', () => {
   assert.equal(remoteFolderWins(undefined, 5), true);
   assert.equal(remoteFolderWins(10, 5), false);
   assert.equal(remoteFolderWins(5, 5), false);
+});
+
+test('parentIdForNewFolder : dans un dossier, pas à la racine', () => {
+  assert.equal(parentIdForNewFolder('root'), null);
+  assert.equal(parentIdForNewFolder(null), null);
+  assert.equal(parentIdForNewFolder(undefined), null);
+  assert.equal(parentIdForNewFolder(''), null);
+  assert.equal(parentIdForNewFolder('a'), 'a');
+  assert.equal(parentIdForNewFolder('b'), 'b');
 });

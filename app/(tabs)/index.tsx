@@ -1,6 +1,6 @@
 // Powered by OnSpace.AI
 import { effectiveFolderId } from '@/services/syncDecide';
-import { canNestFolder, folderDropZone, folderPath, reorderAround } from '@/services/folderTree';
+import { canNestFolder, folderDropZone, folderPath, parentIdForNewFolder, reorderAround } from '@/services/folderTree';
 import { committedRename } from '@/services/galleryRename';
 import {
   CARD_DRAG_HOLD_MS, allowTermination, decideMove, decideRelease, isMouseEvent,
@@ -703,10 +703,10 @@ export default function VaultScreen() {
 
   const handleCreateFolder = useCallback(async () => {
     const name = newName.trim() || 'Nouveau dossier';
-    await createFolder(name, folderColor);
+    await createFolder(name, folderColor, parentIdForNewFolder(activeFolderId));
     setShowNewFolder(false);
     setNewName('');
-  }, [newName, folderColor, createFolder]);
+  }, [newName, folderColor, createFolder, activeFolderId]);
 
   const handleContextMenu = useCallback((type: 'canvas' | 'folder', id: string) => {
     setContextMenu({ type, id });

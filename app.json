@@ -36,7 +36,8 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "./plugins/withArm64Only"
     ],
     "experiments": {
       "typedRoutes": true

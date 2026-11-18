@@ -18,7 +18,7 @@ import {
   scalePan, scalePinchRatio, scaleZoomStep, pixelViewEligible,
   touchAngle, rotateVec, unrotatePoint, snapAngle, normalizeAngle, ROTATE_DEADZONE_DEG,
 } from '@/services/gestureMath';
-import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke, shouldDeferStroke, STROKE_START_DELAY_MS } from '@/services/canvasInput';
+import { screenToZone, zoomAboutAnchor, anchorTranslate, strokeGate, shouldCommitStroke, shouldDeferStroke, strokePointerMovePx, secondPointerAction, shouldFlushDeferredCommit, STROKE_START_DELAY_MS, type StrokePhase } from '@/services/canvasInput';
 import {
   capturePixelSnapshot, canRenderIncrementally, releasePixelSnapshotCache, disposePixelSnapshot,
   type PixelSnapshot,
@@ -244,8 +244,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   const panLastTX = useRef(0);
   const panLastTY = useRef(0);
   const isDrawing = useRef(false);
-  // Trait au doigt pas encore commencé (cf. strokeGate) : points en coord. toile.
-  const pendingStroke = useRef<{ t: number; points: { x: number; y: number }[] } | null>(null);
+  // Trait au doigt pas encore commencé (cf. strokeGate) : points en coord. toile,
+  // plus le point écran de départ pour le seuil de déplacement. Rien n'est
+  // dessiné tant que le geste reste en phase « pending ».
+  const pendingStroke = useRef<{ t: number; points: { x: number; y: number }[]; startPage: { x: number; y: number } } | null>(null);
+  const strokePhase = useRef<StrokePhase | null>(null);
+  const strokeCommittedThisGesture = useRef(false);
   // Pointeurs actifs (web / écran tactile) : un 2e doigt n'apparaît pas
   // toujours dans `touches` du PanResponder.
   const activePointers = useRef(new Set<number>());
@@ -256,32 +260,50 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
   function clearEndStrokeTimer() {
     if (endStrokeTimer.current) { clearTimeout(endStrokeTimer.current); endStrokeTimer.current = null; }
   }
-  function discardInProgressStroke() {
+  function discardInProgressStroke(action: 'discard-pending' | 'cancel-confirmed' = 'discard-pending') {
+    const shouldUndo = action === 'cancel-confirmed' && strokeCommittedThisGesture.current;
     clearEndStrokeTimer();
     pendingStroke.current = null;
+    strokePhase.current = null;
     clearLongPressRef.current();
     isDrawing.current = false;
     cancelStrokeRef.current();
     cancelLassoRef.current();
+    if (shouldUndo) undoRef.current();
+    strokeCommittedThisGesture.current = false;
   }
   function scheduleEndStroke() {
     clearEndStrokeTimer();
+    strokePhase.current = 'ending';
     endStrokeTimer.current = setTimeout(() => {
       endStrokeTimer.current = null;
       if (!shouldCommitStroke(gestureInfo.current.maxTouches)) {
         cancelStrokeRef.current();
+        strokePhase.current = null;
+        strokeCommittedThisGesture.current = false;
         endPixelHold(false);
         return;
       }
       endStrokeRef.current();
+      strokeCommittedThisGesture.current = true;
+      strokePhase.current = null;
       endPixelHold(true);
     }, STROKE_START_DELAY_MS);
   }
   function flushScheduledEndStroke() {
     if (!endStrokeTimer.current) return;
     clearEndStrokeTimer();
-    if (shouldCommitStroke(gestureInfo.current.maxTouches)) { endStrokeRef.current(); endPixelHold(true); }
-    else { cancelStrokeRef.current(); endPixelHold(false); }
+    if (shouldCommitStroke(gestureInfo.current.maxTouches)) {
+      endStrokeRef.current();
+      strokeCommittedThisGesture.current = true;
+      strokePhase.current = null;
+      endPixelHold(true);
+    } else {
+      cancelStrokeRef.current();
+      strokePhase.current = null;
+      strokeCommittedThisGesture.current = false;
+      endPixelHold(false);
+    }
   }
   // Vue pixélisée au lever du doigt : le trait n'entre dans les calques
   // qu'après STROKE_START_DELAY_MS. D'ici là, l'instantané (sans ce trait)
@@ -665,8 +687,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     if (pixelGestureTimer.current) { clearTimeout(pixelGestureTimer.current); pixelGestureTimer.current = null; }
   }
 
-  // Passage en pinch/pan (2e doigt) : le fragment tracé par le premier doigt
-  // est JETÉ (pas commité) — ce n'était pas une tentative de traçage.
+  // Passage en pinch/pan (2e doigt) : pendant l'attente le buffer est jeté
+  // (rien n'a été dessiné) ; si le trait était déjà confirmé, il est annulé
+  // et retiré entièrement — y compris s'il venait d'être commité.
   function startPinch(touches: GestureResponderEvent['nativeEvent']['touches']) {
     const g = gestureInfo.current;
     g.maxTouches = Math.max(g.maxTouches, touches.length);
@@ -676,7 +699,9 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     clearPixelGestureTimer();
     clearPixelHold();
     setPixelGestureRef.current(false);
-    discardInProgressStroke();
+    const phase = strokePhase.current ?? (pendingStroke.current ? 'pending' : (isDrawing.current || strokeCommittedThisGesture.current ? 'confirmed' : null));
+    if (phase) discardInProgressStroke(secondPointerAction(phase));
+    else discardInProgressStroke('discard-pending');
     measureEndRef.current(true);
     pinchStartDistance.current = getDistance(touches);
     pinchStartScale.current = lastScale.current;
@@ -699,6 +724,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
     const p = pendingStroke.current;
     pendingStroke.current = null;
     if (!p) return;
+    strokePhase.current = 'confirmed';
     beginStrokeRef.current(p.points[0].x, p.points[0].y, paintScaleRef.current);
     for (let i = 1; i < p.points.length; i++) continueStrokeRef.current(p.points[i].x, p.points[i].y);
   }
@@ -711,21 +737,29 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
       onPanResponderGrant: (evt) => {
         const touches = evt.nativeEvent.touches;
         // Un vrai nouveau geste à 1 doigt : on valide le trait précédent
-        // (commit différé). Un geste à 2 doigts jette ce fragment.
-        if (touches.length >= 2) clearEndStrokeTimer();
-        else {
+        // (commit différé), sauf si un autre pointeur est encore actif
+        // (2e doigt après un release Android « fantôme »).
+        const pid = (evt.nativeEvent as { pointerId?: number; identifier?: number }).pointerId
+          ?? (evt.nativeEvent as { identifier?: number }).identifier;
+        const alreadyTracked = pid != null && activePointers.current.has(pid);
+        if (touches.length >= 2 || !shouldFlushDeferredCommit({
+          touchCount: touches.length,
+          activePointerCount: activePointers.current.size + (pid != null && !alreadyTracked ? 1 : 0),
+          newPointerAlreadyTracked: alreadyTracked,
+        })) {
+          clearEndStrokeTimer();
+          if (pid != null) activePointers.current.add(pid);
+        } else {
           flushScheduledEndStroke();
           // Pointeurs périmés (pointerup manqué) : ne garder que celui-ci,
           // sinon le prochain trait seul serait pris pour un multi-touch.
-          const pid = (evt.nativeEvent as { pointerId?: number; identifier?: number }).pointerId
-            ?? (evt.nativeEvent as { identifier?: number }).identifier;
           if (pid != null) activePointers.current = new Set([pid]);
           else if (activePointers.current.size > 1) activePointers.current.clear();
         }
         // Vue pixélisée : on ne repasse au Svg en direct QUE pour un geste qui
         // modifie le dessin (trait, gomme, déplacement…), et seulement une
-        // fois sûr que ce n'est pas un pinch (délai > attente de 80 ms du
-        // trait). Zoom / pan / rotation gardent l'instantané pixélisé : il
+        // fois sûr que ce n'est pas un pinch (délai > attente du trait).
+        // Zoom / pan / rotation gardent l'instantané pixélisé : il
         // suit les mêmes valeurs de transformation que le Svg.
         clearPixelGestureTimer();
         if (settingsRef.current.zoomRendering === 'pixelated' && touches.length < 2
@@ -736,19 +770,36 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           }, PIXEL_LIVE_DELAY_MS);
         }
 
+        if (touches.length >= 2) {
+          // Ne pas réinitialiser la phase avant : startPinch doit encore
+          // pouvoir jeter le buffer ou retirer le trait déjà confirmé.
+          const g = gestureInfo.current;
+          g.maxTouches = Math.max(g.maxTouches, touches.length);
+          startPinch(touches);
+          return;
+        }
+        if (!shouldFlushDeferredCommit({
+          touchCount: touches.length,
+          activePointerCount: activePointers.current.size,
+          newPointerAlreadyTracked: alreadyTracked,
+        })) {
+          // 2e doigt après un release « fantôme » : on ne recommence pas un trait.
+          gestureInfo.current.maxTouches = Math.max(gestureInfo.current.maxTouches, 2);
+          const phase = strokePhase.current ?? (pendingStroke.current ? 'pending' : 'confirmed');
+          discardInProgressStroke(secondPointerAction(phase));
+          return;
+        }
+
         gestureInfo.current = {
           start: Date.now(),
           maxTouches: touches.length,
-          midStart: touches.length >= 2 ? getMidpointPage(touches) : null,
+          midStart: null,
           midMoved: 0,
         };
 
         pendingStroke.current = null;
-        if (touches.length >= 2) {
-          startPinch(touches);
-          return;
-        }
-
+        strokePhase.current = null;
+        strokeCommittedThisGesture.current = false;
         isPinching.current = false;
         const { pageX, pageY } = evt.nativeEvent;
         const tool = activeToolRef.current;
@@ -853,13 +904,16 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
 
         isDrawing.current = true;
         const c = toCanvasCoords(pageX, pageY);
-        // Au doigt (y compris tactile sur le web / Electron), le trait attend
-        // ~80 ms : si un 2e doigt arrive, c'était un pinch/pan et rien n'est
-        // tracé. Souris : immédiat.
+        // Au doigt (y compris tactile sur le web / Electron), le trait est
+        // bufferisé sans rendu jusqu'à confirmation (délai ou déplacement) :
+        // si un 2e doigt arrive, c'était un pinch/pan et rien n'est tracé.
+        // Souris : immédiat.
         const ne = evt.nativeEvent as typeof evt.nativeEvent & { pointerType?: string };
         if (shouldDeferStroke({ platformOS: Platform.OS, touchCount: ne.touches?.length ?? 0, pointerType: ne.pointerType })) {
-          pendingStroke.current = { t: Date.now(), points: [c] };
+          pendingStroke.current = { t: Date.now(), points: [c], startPage: { x: pageX, y: pageY } };
+          strokePhase.current = 'pending';
         } else {
+          strokePhase.current = 'confirmed';
           beginStrokeRef.current(c.x, c.y, paintScaleRef.current);
         }
         // Appui long → pipette (outils de tracé uniquement).
@@ -874,6 +928,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
           longPressFired.current = true;
           isDrawing.current = false;
           pendingStroke.current = null;
+          strokePhase.current = null;
           cancelStrokeRef.current();
           const pc = toCanvasCoords(st.x, st.y);
           const col = eyedropColorRef.current(pc.x, pc.y);
@@ -896,7 +951,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         // avant `touches` : on jette le trait sans attendre.
         if (touches.length < 2 && gs.numberActiveTouches >= 2) {
           gestureInfo.current.maxTouches = Math.max(gestureInfo.current.maxTouches, gs.numberActiveTouches);
-          discardInProgressStroke();
+          const phase = strokePhase.current ?? (pendingStroke.current ? 'pending' : 'confirmed');
+          discardInProgressStroke(secondPointerAction(phase));
           return;
         }
 
@@ -1058,9 +1114,10 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         const pend = pendingStroke.current;
         if (pend) {
           pend.points.push(c);
-          const gate = strokeGate({ elapsedMs: Date.now() - pend.t, maxTouches: gestureInfo.current.maxTouches, defer: true });
+          const movedPx = strokePointerMovePx(pend.startPage, { x: pageX, y: pageY });
+          const gate = strokeGate({ elapsedMs: Date.now() - pend.t, maxTouches: gestureInfo.current.maxTouches, defer: true, movedPx });
           if (gate === 'start') flushPendingStroke();
-          else if (gate === 'cancel') pendingStroke.current = null;
+          else if (gate === 'cancel') { pendingStroke.current = null; strokePhase.current = null; }
           return;
         }
         continueStrokeRef.current(c.x, c.y);
@@ -1121,7 +1178,11 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         }
         if (tool !== 'fill' && tool !== 'move') {
           // Un geste qui a vu 2 doigts ne laisse JAMAIS de trait (points noirs).
-          if (!shouldCommitStroke(g.maxTouches)) { discardInProgressStroke(); return; }
+          if (!shouldCommitStroke(g.maxTouches)) {
+            const phase = strokePhase.current ?? (pendingStroke.current ? 'pending' : 'confirmed');
+            discardInProgressStroke(secondPointerAction(phase));
+            return;
+          }
           // Tap bref à un doigt : le point voulu est tracé.
           if (pendingStroke.current) flushPendingStroke();
           // Commit différé : un release Android « fantôme » (2e doigt qui
@@ -1146,7 +1207,8 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, Props>(({ width, height, o
         if (activeToolRef.current === 'measure') return;
         // Geste interrompu : un trait en attente ou multi-doigts est jeté.
         if (pendingStroke.current || !shouldCommitStroke(gestureInfo.current.maxTouches)) {
-          discardInProgressStroke();
+          const phase = strokePhase.current ?? (pendingStroke.current ? 'pending' : 'confirmed');
+          discardInProgressStroke(secondPointerAction(phase));
           return;
         }
         clearEndStrokeTimer();
@@ -1677,8 +1739,8 @@ const rotStyles = StyleSheet.create({
 /** Appui long → pipette : délai et tolérance de mouvement. */
 // Outils qui ne modifient pas le dessin : la vue pixélisée reste affichée.
 const PIXEL_KEEP_TOOLS = new Set<string>(['measure', 'eyedropper']);
-// Au-delà du délai d'attente d'un trait (80 ms) : un pinch est déjà détecté.
-const PIXEL_LIVE_DELAY_MS = 90;
+// Un peu après le délai d'attente d'un trait : un pinch est déjà détecté.
+const PIXEL_LIVE_DELAY_MS = STROKE_START_DELAY_MS + 10;
 // Filet : vue pixélisée rendue au plus tard après ce délai si le trait
 // commité n'a pas (encore) changé les calques.
 const PIXEL_HOLD_MAX_MS = 300;

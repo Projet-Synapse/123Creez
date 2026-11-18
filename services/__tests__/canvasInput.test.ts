@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   pivotTranslate, screenToZone, zoneToScreen, zoomAboutAnchor,
-  strokeGate, shouldCommitStroke, shouldDeferStroke, sliderValue, STROKE_START_DELAY_MS,
+  strokeGate, shouldCommitStroke, shouldDeferStroke, sliderValue,
+  strokePointerMovePx, secondPointerAction, shouldFlushDeferredCommit,
+  STROKE_START_DELAY_MS, STROKE_START_MOVE_PX,
 } from '../canvasInput';
 import { viewParams, docToScreen } from '../measureMath';
 
@@ -56,11 +58,52 @@ test('viewParams (outil Mesure) suit le même pivot centré', () => {
 
 test('strokeGate : attente, démarrage, annulation au 2e doigt', () => {
   assert.equal(strokeGate({ elapsedMs: 10, maxTouches: 1, defer: true }), 'wait');
+  assert.equal(strokeGate({ elapsedMs: STROKE_START_DELAY_MS - 1, maxTouches: 1, defer: true, movedPx: 0 }), 'wait');
   assert.equal(strokeGate({ elapsedMs: STROKE_START_DELAY_MS, maxTouches: 1, defer: true }), 'start');
   assert.equal(strokeGate({ elapsedMs: 10, maxTouches: 2, defer: true }), 'cancel');
   assert.equal(strokeGate({ elapsedMs: 5000, maxTouches: 2, defer: true }), 'cancel');
   // Souris / web : immédiat
   assert.equal(strokeGate({ elapsedMs: 0, maxTouches: 1, defer: false }), 'start');
+});
+
+test('strokeGate : un 2e doigt pendant l\'attente annule, même très tard, sans jamais passer par start', () => {
+  for (const elapsedMs of [0, 50, STROKE_START_DELAY_MS, 500, 5000]) {
+    assert.equal(
+      strokeGate({ elapsedMs, maxTouches: 2, defer: true, movedPx: 0 }),
+      'cancel',
+      `elapsedMs=${elapsedMs}`,
+    );
+  }
+});
+
+test('strokeGate : déplacement net confirme avant la fin du délai ; en dessous du seuil on attend', () => {
+  assert.equal(STROKE_START_DELAY_MS, 120);
+  assert.equal(STROKE_START_MOVE_PX, 24);
+  assert.equal(strokeGate({ elapsedMs: 40, maxTouches: 1, defer: true, movedPx: STROKE_START_MOVE_PX - 1 }), 'wait');
+  assert.equal(strokeGate({ elapsedMs: 40, maxTouches: 1, defer: true, movedPx: STROKE_START_MOVE_PX }), 'start');
+  // Un 2e doigt l'emporte même si le seuil de déplacement est dépassé
+  assert.equal(strokeGate({ elapsedMs: 40, maxTouches: 2, defer: true, movedPx: 80 }), 'cancel');
+});
+
+test('strokePointerMovePx mesure la distance écran depuis le départ', () => {
+  assert.equal(strokePointerMovePx({ x: 0, y: 0 }, { x: 3, y: 4 }), 5);
+  assert.equal(strokePointerMovePx({ x: 10, y: 10 }, { x: 10, y: 10 }), 0);
+});
+
+test('secondPointerAction : buffer jeté si encore en attente, trait retiré s\'il est déjà confirmé', () => {
+  assert.equal(secondPointerAction('pending'), 'discard-pending');
+  assert.equal(secondPointerAction('confirmed'), 'cancel-confirmed');
+  assert.equal(secondPointerAction('ending'), 'cancel-confirmed');
+});
+
+test('shouldFlushDeferredCommit : pas de validation si un 2e pointeur est encore là', () => {
+  // Nouveau geste à un doigt, aucun autre pointeur : on peut valider le trait précédent
+  assert.equal(shouldFlushDeferredCommit({ touchCount: 1, activePointerCount: 1, newPointerAlreadyTracked: true }), true);
+  assert.equal(shouldFlushDeferredCommit({ touchCount: 1, activePointerCount: 0, newPointerAlreadyTracked: false }), true);
+  // 2 touches, ou un autre pointeur encore actif : c'est un pinch, on ne valide pas
+  assert.equal(shouldFlushDeferredCommit({ touchCount: 2, activePointerCount: 2, newPointerAlreadyTracked: true }), false);
+  assert.equal(shouldFlushDeferredCommit({ touchCount: 1, activePointerCount: 2, newPointerAlreadyTracked: false }), false);
+  assert.equal(shouldFlushDeferredCommit({ touchCount: 1, activePointerCount: 1, newPointerAlreadyTracked: false }), false);
 });
 
 test('shouldCommitStroke : jamais de trait si un 2e doigt est apparu', () => {

@@ -1,6 +1,7 @@
 // Powered by OnSpace.AI
 import { effectiveFolderId } from '@/services/syncDecide';
 import { canNestFolder, folderDropZone, folderPath, reorderAround } from '@/services/folderTree';
+import { committedRename } from '@/services/galleryRename';
 import {
   CARD_DRAG_HOLD_MS, allowTermination, decideMove, decideRelease, isMouseEvent,
   scrollEnabledWhileDragging, shouldBlockNativeResponder, shouldStartDragOnHold,
@@ -208,7 +209,7 @@ const CanvasCard = React.memo(function CanvasCard({
   onDragEnd: () => void;
   onOpen: () => void;
   onMenu: () => void;
-  onRenameSubmit: () => void;
+  onRenameSubmit: (fromBlur?: boolean) => void;
   onRenameChange: (name: string) => void;
   registerLayout: (l: CardLayout) => void;
   registerMeasurer?: (fn: (() => void) | null) => void;
@@ -251,7 +252,7 @@ const CanvasCard = React.memo(function CanvasCard({
                 value={renamingName}
                 onChangeText={onRenameChange}
                 onSubmitEditing={onRenameSubmit}
-                onBlur={onRenameSubmit}
+                onBlur={() => onRenameSubmit(true)}
                 autoFocus
               />
             ) : (
@@ -287,6 +288,7 @@ function tint(color: string | undefined, alpha: string, fallback: string): strin
 
 const FolderCard = React.memo(function FolderCard({
   item, previewThumbs, count, cellW, isActive, isDropTarget, insertSide, isDragging, styles, theme,
+  renamingName, onRenameSubmit, onRenameChange,
   onTap, onMenu, onDragStart, onDragMove, onDragEnd, registerLayout, registerMeasurer,
 }: {
   item: Folder;
@@ -301,6 +303,9 @@ const FolderCard = React.memo(function FolderCard({
   isDragging?: boolean;
   styles: any;
   theme: any;
+  renamingName: string | null;
+  onRenameSubmit: (fromBlur?: boolean) => void;
+  onRenameChange: (name: string) => void;
   onTap: () => void;
   onMenu: () => void;
   onDragStart: () => void;
@@ -368,7 +373,7 @@ const FolderCard = React.memo(function FolderCard({
       onLayout={measure}
       style={[styles.cardBody, isDragging ? { opacity: 0.35 } : undefined]}
     >
-      <View {...gestures.panHandlers}>
+      <View {...(renamingName !== null ? {} : gestures.panHandlers)}>
         {insertSide && (
           <View pointerEvents="none" style={[styles.folderInsertBar, insertSide === 'before' ? { left: -8 } : { right: -8 }, { backgroundColor: theme.accent }]} />
         )}
@@ -406,10 +411,21 @@ const FolderCard = React.memo(function FolderCard({
         </View>
         {/* Nom + nombre de toiles SOUS le cadre, comme le titre d'une toile. */}
         <View style={styles.cardCaption}>
-          <View style={styles.folderTitleRow}>
-            <MaterialCommunityIcons name="folder" size={13} color={item.color} />
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
-          </View>
+          {renamingName !== null ? (
+            <TextInput
+              style={styles.inlineInput}
+              value={renamingName}
+              onChangeText={onRenameChange}
+              onSubmitEditing={onRenameSubmit}
+              onBlur={() => onRenameSubmit(true)}
+              autoFocus
+            />
+          ) : (
+            <View style={styles.folderTitleRow}>
+              <MaterialCommunityIcons name="folder" size={13} color={item.color} />
+              <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+            </View>
+          )}
           <Text style={styles.cardSubtitle} numberOfLines={1}>{count} toile{count !== 1 ? 's' : ''}</Text>
         </View>
       </View>
@@ -446,6 +462,10 @@ export default function VaultScreen() {
   const [folderColor, setFolderColor] = useState(FOLDER_COLORS[0]);
   const [contextMenu, setContextMenu] = useState<{ type: 'canvas' | 'folder'; id: string } | null>(null);
   const [renaming, setRenaming] = useState<{ type: 'canvas' | 'folder'; id: string; name: string } | null>(null);
+  // La fermeture du menu (Modal) déclenche souvent un blur immédiat sur le
+  // champ qui vient d'apparaître : on ignore ce premier blur.
+  const renameBlurArmed = useRef(false);
+  const renameArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Drag & drop state ────────────────────────────────────────────
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -692,10 +712,24 @@ export default function VaultScreen() {
     setContextMenu({ type, id });
   }, []);
 
-  const handleRenameSubmit = useCallback(async () => {
+  const beginRename = useCallback((type: 'canvas' | 'folder', id: string, currentName: string) => {
+    setContextMenu(null);
+    if (renameArmTimer.current) clearTimeout(renameArmTimer.current);
+    renameBlurArmed.current = false;
+    // Laisser le Modal se fermer avant d'afficher le champ (évite un blur immédiat).
+    renameArmTimer.current = setTimeout(() => {
+      setRenaming({ type, id, name: currentName });
+      renameArmTimer.current = setTimeout(() => { renameBlurArmed.current = true; renameArmTimer.current = null; }, 250);
+    }, 80);
+  }, []);
+
+  const handleRenameSubmit = useCallback(async (fromBlur = false) => {
     if (!renaming) return;
-    if (renaming.type === 'canvas') await renameCanvas(renaming.id, renaming.name);
-    else await renameFolder(renaming.id, renaming.name);
+    if (fromBlur && !renameBlurArmed.current) return;
+    const name = committedRename(renaming.name);
+    if (!name) { setRenaming(null); return; }
+    if (renaming.type === 'canvas') await renameCanvas(renaming.id, name);
+    else await renameFolder(renaming.id, name);
     setRenaming(null);
   }, [renaming, renameCanvas, renameFolder]);
 
@@ -854,7 +888,9 @@ export default function VaultScreen() {
       resolveDragMove('folder', item.id, x, y);
     },
     onDragEnd: () => resolveDragEnd('folder', item.id),
-  }), [handleContextMenu, resolveDragMove, resolveDragEnd, remeasureAll]);
+    onRenameSubmit: handleRenameSubmit,
+    onRenameChange: (n: string) => setRenaming(r => r && r.type === 'folder' && r.id === item.id ? { ...r, name: n } : r),
+  }), [handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd, remeasureAll]);
 
   const contextItem = contextMenu
     ? (contextMenu.type === 'canvas'
@@ -894,11 +930,12 @@ export default function VaultScreen() {
         isDragging={!!(drag?.active && drag.kind === 'folder' && drag.id === item.id)}
         styles={styles}
         theme={theme}
+        renamingName={renaming?.type === 'folder' && renaming.id === item.id ? renaming.name : null}
         registerLayout={layoutFor(`folder:${item.id}`)}
         registerMeasurer={measurerFor(`folder:${item.id}`)}
       />
     );
-  }, [canvases, makeFolderCardProps, colW, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor]);
+  }, [canvases, makeFolderCardProps, colW, activeFolderId, drag, hoverFolderId, folderInsert, styles, theme, layoutFor, measurerFor, renaming]);
 
   const gridItems: GridItem[] = [
     ...rootFolders.map(folder => ({ kind: 'folder' as const, folder })),
@@ -1305,9 +1342,8 @@ export default function VaultScreen() {
                   <Text style={styles.contextItemText}>Ouvrir</Text>
                 </Pressable>
                 <Pressable style={styles.contextItem} onPress={() => {
-                  setContextMenu(null);
                   const c = canvases.find(x => x.id === contextMenu.id);
-                  setRenaming({ type: 'canvas', id: contextMenu.id, name: c?.name ?? '' });
+                  beginRename('canvas', contextMenu.id, c?.name ?? '');
                 }}>
                   <MaterialCommunityIcons name="rename-box" size={18} color={theme.textSecondary} />
                   <Text style={styles.contextItemText}>Renommer</Text>
@@ -1333,9 +1369,8 @@ export default function VaultScreen() {
             {contextMenu?.type === 'folder' && (
               <>
                 <Pressable style={styles.contextItem} onPress={() => {
-                  setContextMenu(null);
                   const f = folders.find(x => x.id === contextMenu.id);
-                  setRenaming({ type: 'folder', id: contextMenu.id, name: f?.name ?? '' });
+                  beginRename('folder', contextMenu.id, f?.name ?? '');
                 }}>
                   <MaterialCommunityIcons name="rename-box" size={18} color={theme.textSecondary} />
                   <Text style={styles.contextItemText}>Renommer</Text>

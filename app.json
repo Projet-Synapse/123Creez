@@ -37,7 +37,7 @@
         }
       ],
       "expo-web-browser",
-      "./plugins/withArm64Only"
+      "./plugins/withAndroidArmAbis"
     ],
     "experiments": {
       "typedRoutes": true

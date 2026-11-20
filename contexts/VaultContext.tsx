@@ -23,6 +23,7 @@ import { AppState } from 'react-native';
 import { hydrateSyncStatus, subscribeSyncStatus } from '@/services/syncLog';
 import { recordTombstone, autoPush, syncNow, getSupabaseClient } from '@/services/supabaseService';
 import { canNestFolder } from '@/services/folderTree';
+import { enqueueGalleryThumbAfterSave, setGalleryThumbListener } from '@/services/galleryThumbRefresh';
 
 interface VaultContextType {
   canvases: CanvasMeta[];
@@ -285,10 +286,18 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         .catch(() => { });
     }
     schedulePush();
+    enqueueGalleryThumbAfterSave(updatedMeta);
   }, []);
 
   const loadCanvasData = useCallback(async (id: string): Promise<CanvasData | null> => {
     return loadCanvas(id);
+  }, []);
+
+  useEffect(() => {
+    setGalleryThumbListener((id, thumbnail, thumbAt) => {
+      setCanvases(prev => prev.map(c => c.id === id ? { ...c, thumbnail, thumbAt } : c));
+    });
+    return () => setGalleryThumbListener(null);
   }, []);
 
   /** Import dossier : image → nouvelle toile (calque image ajusté). */

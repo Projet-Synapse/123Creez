@@ -4,6 +4,7 @@
 // (imageSmoothingEnabled = false, photos en image-rendering pixelated).
 // Aucune donnée du dessin n'est modifiée.
 import type { RasterScene } from './pixelRaster';
+import { renderThumbnail } from './thumbnailService';
 import { docRasterSize } from './pixelGrid';
 
 /** Web : URL data:image/png de docW × docH px. */
@@ -62,3 +63,9 @@ export function releasePixelSnapshotCache(): void {}
 
 /** Web : rien à libérer (URL data:). */
 export function disposePixelSnapshot(_img: PixelSnapshot): void {}
+
+
+/** Vignette JPEG basse résolution (canvas 2D, web / Electron). */
+export async function rasterSceneToJpegDataUrl(scene: RasterScene, maxWidth: number): Promise<string | null> {
+  return renderThumbnail(scene.layers, scene.docW, scene.docH, maxWidth);
+}

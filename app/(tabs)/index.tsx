@@ -27,6 +27,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAlert } from '@/template';
 import { CanvasMeta, Folder, FolderPreviewMode, loadCanvas } from '@/services/vaultService';
 import CanvasThumb from '@/components/feature/CanvasThumb';
+import CanvasPreviewSheet from '@/components/feature/CanvasPreviewSheet';
 import { meetFitRect } from '@/services/gestureMath';
 
 const FOLDER_COLORS = ['#4ecdc4', '#ff6b6b', '#ffd700', '#6bcb77', '#7c4dff', '#ff8800', '#00b0ff', '#f48fb1'];
@@ -80,7 +81,7 @@ const GRID_GAP = 10;
 
 // ─── Shared card gesture handling ─────────────────────────────────────────────
 // Souris ET tactile : l'appui immobile est capté dès le doigt posé — un
-// relâchement sans mouvement est le TAP (ouvre la toile / le dossier).
+// relâchement sans mouvement est le TAP (aperçu de la toile / ouvre le dossier).
 // Renommer / supprimer passent UNIQUEMENT par la bulle « ⋮ » de la carte.
 // Déplacer (glisser-déposer) :
 //  - tactile : appui long (~450 ms) immobile → la carte « décolle » sous le
@@ -457,6 +458,7 @@ export default function VaultScreen() {
   const [showNewCanvas, setShowNewCanvas] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(false);
+  const [previewCanvasId, setPreviewCanvasId] = useState<string | null>(null);
   const [movingCanvasId, setMovingCanvasId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [folderColor, setFolderColor] = useState(FOLDER_COLORS[0]);
@@ -765,6 +767,20 @@ export default function VaultScreen() {
     router.push(`/editor/${id}`);
   }, [router]);
 
+  const handleOpenPreview = useCallback((id: string) => {
+    setPreviewCanvasId(id);
+  }, []);
+
+  const handleClosePreview = useCallback(() => {
+    setPreviewCanvasId(null);
+  }, []);
+
+  const handleConfirmOpenCanvas = useCallback(() => {
+    const id = previewCanvasId;
+    setPreviewCanvasId(null);
+    if (id) handleOpenCanvas(id);
+  }, [previewCanvasId, handleOpenCanvas]);
+
   // ─── Drag & drop resolution ───────────────────────────────────────
   const hit = (key: string, x: number, y: number) => {
     const l = cardLayouts.current.get(key);
@@ -861,7 +877,7 @@ export default function VaultScreen() {
 
   const makeCanvasCardProps = useCallback((item: CanvasMeta) => ({
     item,
-    onTap: () => handleOpenCanvas(item.id),
+    onTap: () => handleOpenPreview(item.id),
     onDragStart: () => { remeasureAll(); setDrag({
       kind: 'canvas' as const, id: item.id, name: item.name, thumb: item.thumbnail, x: 0, y: 0, active: false,
     }); },
@@ -874,7 +890,7 @@ export default function VaultScreen() {
     onMenu: () => handleContextMenu('canvas', item.id),
     onRenameSubmit: handleRenameSubmit,
     onRenameChange: (n: string) => setRenaming(r => r && r.type === 'canvas' && r.id === item.id ? { ...r, name: n } : r),
-  }), [handleOpenCanvas, handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd, remeasureAll]);
+  }), [handleOpenPreview, handleOpenCanvas, handleContextMenu, handleRenameSubmit, resolveDragMove, resolveDragEnd, remeasureAll]);
 
   const makeFolderCardProps = useCallback((item: Folder, previewThumbs: CanvasMeta[], count: number) => ({
     item,
@@ -1432,6 +1448,12 @@ export default function VaultScreen() {
           </View>
         </Pressable>
       </Modal>
+      <CanvasPreviewSheet
+        meta={canvases.find(c => c.id === previewCanvasId) ?? null}
+        folders={folders}
+        onClose={handleClosePreview}
+        onOpen={handleConfirmOpenCanvas}
+      />
     </View>
   );
 }

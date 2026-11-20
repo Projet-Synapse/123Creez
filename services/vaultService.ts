@@ -262,6 +262,14 @@ export function computeStrokeCount(layers: Layer[]): number {
   return layers.reduce((sum, l) => sum + l.strokes.filter(s => s.tool !== 'fill').length, 0);
 }
 
+/** Taille brute de la toile en stockage (octets estimés, UTF-16 comme getStorageInfo). */
+export async function getCanvasStorageBytes(id: string): Promise<number | null> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.CANVAS_DATA(id));
+    return raw ? raw.length * 2 : null;
+  } catch { return null; }
+}
+
 // ─── Storage info ─────────────────────────────────────────────────────────────
 
 export async function getStorageInfo(): Promise<{ canvasCount: number; totalSize: number; vaultKeys: string[] }> {

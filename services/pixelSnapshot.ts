@@ -11,7 +11,7 @@
 // proche voisin (FilterMode.Nearest). Affichage seul : rien n'est exporté,
 // aucune donnée du dessin n'est modifiée.
 import {
-  Skia, FilterMode, MipmapMode, PaintStyle, StrokeCap, StrokeJoin, BlendMode, ClipOp, matchFont,
+  Skia, FilterMode, MipmapMode, PaintStyle, StrokeCap, StrokeJoin, BlendMode, ClipOp, matchFont, ImageFormat,
   type SkCanvas, type SkFont, type SkImage, type SkPaint, type SkPath, type SkSurface,
 } from '@shopify/react-native-skia';
 import { planDocRaster, planIncremental, dataUrlBase64, type RasterGeom, type RasterOp, type RasterPaint, type RasterScene } from './pixelRaster';
@@ -252,4 +252,35 @@ export function releasePixelSnapshotCache(): void {
 /** Libère une image d'instantané qui n'est plus affichée. */
 export function disposePixelSnapshot(img: PixelSnapshot): void {
   try { img.dispose(); } catch { /* déjà libérée */ }
+}
+
+
+/** Vignette JPEG basse résolution, surface à part (n'interfère pas avec
+    l'instantané plein document de l'éditeur). */
+export async function rasterSceneToJpegDataUrl(scene: RasterScene, maxWidth: number): Promise<string | null> {
+  const w = Math.max(1, Math.round(Math.min(maxWidth, Math.max(1, scene.docW))));
+  const h = Math.max(1, Math.round(w * (Math.max(1, scene.docH) / Math.max(1, scene.docW))));
+  const surface = Skia.Surface.MakeOffscreen(w, h) ?? Skia.Surface.Make(w, h);
+  if (!surface) return null;
+  try {
+    const canvas = surface.getCanvas();
+    canvas.clear(Skia.Color('transparent'));
+    canvas.save();
+    canvas.scale(w / Math.max(1, scene.docW), h / Math.max(1, scene.docH));
+    await runOps(canvas, planDocRaster(scene));
+    canvas.restore();
+    surface.flush();
+    const img = surface.makeImageSnapshot();
+    try {
+      const b64 = img.encodeToBase64(ImageFormat.JPEG, 80);
+      if (!b64) return null;
+      return `data:image/jpeg;base64,${b64}`;
+    } finally {
+      try { img.dispose(); } catch { /* rien */ }
+    }
+  } catch {
+    return null;
+  } finally {
+    try { surface.dispose(); } catch { /* rien */ }
+  }
 }
